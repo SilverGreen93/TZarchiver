@@ -10,9 +10,9 @@ Imports System.Runtime.InteropServices
 
 <Assembly: AssemblyTitle("TZarchiver")>
 <Assembly: AssemblyDescription("Utility to view, extract and create Trainz TZarc files.")>
-<Assembly: AssemblyCompany("vvmm")>
+<Assembly: AssemblyCompany("SilverGreen93")>
 <Assembly: AssemblyProduct("TZarchiver")>
-<Assembly: AssemblyCopyright("Copyright © vvmm 2017")>
+<Assembly: AssemblyCopyright("Copyright © SilverGreen93 2024")>
 <Assembly: AssemblyTrademark("")>
 
 <Assembly: ComVisible(False)>
@@ -31,5 +31,5 @@ Imports System.Runtime.InteropServices
 ' by using the '*' as shown below:
 ' <Assembly: AssemblyVersion("1.0.*")> 
 
-<Assembly: AssemblyVersion("1.2.0.0")>
-<Assembly: AssemblyFileVersion("1.2.0.0")>
+<Assembly: AssemblyVersion("1.3.0.0")>
+<Assembly: AssemblyFileVersion("1.3.0.0")>

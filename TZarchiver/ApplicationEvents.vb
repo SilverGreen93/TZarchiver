@@ -13,8 +13,8 @@
                      Handles Me.StartupNextInstance
 
             Dim f = Application.MainForm
-            If f.GetType Is GetType(Form1) Then
-                CType(f, Form1).NewArgumentsReceived(e.CommandLine.ToArray)
+            If f.GetType Is GetType(frmMain) Then
+                CType(f, frmMain).NewArgumentsReceived(e.CommandLine.ToArray)
             End If
 
         End Sub
