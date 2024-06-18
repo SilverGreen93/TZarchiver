@@ -36,11 +36,16 @@
                     Dim b2 As Byte() = System.Text.Encoding.ASCII.GetBytes("TZac")
 
                     If Not CompareBytes(b1, b2) Then
-                        MessageBox.Show("File format not supported for " & file)
+                        MessageBox.Show("File format not supported for " & file, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
                         Continue For
                     End If
 
                     Dim fpointer As Integer = 4
+                    Dim fileVersion As Integer = ParseInteger32(bytes, fpointer)
+                    If fileVersion <> 1 Then
+                        MessageBox.Show("TZarc version " & fileVersion & " is not supported!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                        Continue For
+                    End If
 
                     fpointer = fpointer + 4
 
