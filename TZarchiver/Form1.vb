@@ -1,4 +1,6 @@
-﻿Public Class Form1
+﻿Imports System.IO
+
+Public Class Form1
 
     Dim fileList As New List(Of String)
 
@@ -18,6 +20,10 @@
         End If
     End Sub
 
+    ''' <summary>
+    ''' Extract files from a TZarc archive
+    ''' </summary>
+    ''' <param name="mode">Specifies if files are also extracted or only read</param>
     Sub ExtractTZarc(mode As Boolean)
         Dim currentTZarc As Integer = 0
         TreeView1.Nodes.Clear()
@@ -29,29 +35,26 @@
                 Try
                     TreeView1.Nodes.Add(System.IO.Path.GetFileName(file))
 
-                    Dim bytes As Byte() = My.Computer.FileSystem.ReadAllBytes(file)
+                    Dim FileStr As New BinaryReader(IO.File.Open(file, FileMode.Open))
+                    FileStr.BaseStream.Seek(0, SeekOrigin.Begin)
 
-                    Dim b1(3) As Byte
-                    Array.Copy(bytes, b1, 4)
-                    Dim b2 As Byte() = System.Text.Encoding.ASCII.GetBytes("TZac")
+                    Dim ExpectedSignature As Byte() = System.Text.Encoding.ASCII.GetBytes("TZac")
+                    Dim FileSignature(ExpectedSignature.Length - 1) As Byte
 
-                    If Not CompareBytes(b1, b2) Then
-                        MessageBox.Show("File format not supported for " & file, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                    FileSignature = FileStr.ReadBytes(ExpectedSignature.Length)
+
+                    If Not CompareBytes(FileSignature, ExpectedSignature) Then
+                        Throw New Exception("File format not supported for " & file)
                         Continue For
                     End If
 
-                    Dim fpointer As Integer = 4
-                    Dim fileVersion As Integer = ParseInteger32(bytes, fpointer)
+                    Dim fileVersion As UInteger = ParseUInt32(FileStr.ReadBytes(4))
                     If fileVersion <> 1 Then
-                        MessageBox.Show("TZarc version " & fileVersion & " is not supported!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                        Throw New Exception("TZarc version " & fileVersion & " is not supported!")
                         Continue For
                     End If
 
-                    fpointer = fpointer + 4
-
-                    Dim fileCount As Integer = ParseInteger32(bytes, fpointer)
-
-                    fpointer = fpointer + 4
+                    Dim fileCount As UInteger = ParseUInt32(FileStr.ReadBytes(4))
 
                     Dim filesInside As New List(Of FileInfo)
 
@@ -59,24 +62,19 @@
                         Dim currentFile As New FileInfo
                         Dim fNameSize As Byte
 
-                        fNameSize = bytes(fpointer)
-                        fpointer = fpointer + 1
+                        fNameSize = FileStr.ReadByte
 
                         Dim fileName(fNameSize - 1) As Byte
-                        Array.Copy(bytes, fpointer, fileName, 0, fNameSize)
+                        Array.Copy(FileStr.ReadBytes(fNameSize), 0, fileName, 0, fNameSize)
                         currentFile.fileName = System.Text.Encoding.UTF8.GetString(fileName)
-
-                        fpointer = fpointer + fNameSize
 
                         TreeView1.Nodes(currentTZarc).Nodes.Add(currentFile.fileName)
 
-                        currentFile.fileLength = ParseInteger64(bytes, fpointer)
-                        fpointer = fpointer + 8
+                        currentFile.fileLength = ParseUInt64(FileStr.ReadBytes(8))
                         filesInside.Add(currentFile)
-
                     Next
 
-                    fpointer = fpointer + 4 'skip random time data
+                    FileStr.ReadUInt32() 'skip random time data
 
                     Dim currentPath As String = System.IO.Path.GetDirectoryName(file) & "\" & System.IO.Path.GetFileNameWithoutExtension(file)
                     If mode Then My.Computer.FileSystem.CreateDirectory(currentPath)
@@ -84,8 +82,10 @@
                     If mode Then
                         For Each fis In filesInside
                             Dim currentData(fis.fileLength - 1) As Byte
-                            Array.Copy(bytes, fpointer, currentData, 0, fis.fileLength)
-                            fpointer = fpointer + fis.fileLength
+                            If fis.fileLength > Integer.MaxValue Then
+                                Throw New Exception("Internal filesize for " & fis.fileName & " exceeds " & Integer.MaxValue & " !")
+                            End If
+                            Array.Copy(FileStr.ReadBytes(fis.fileLength), 0, currentData, 0, CInt(fis.fileLength))
 
                             'ensure we have all the subdirectories required
                             If fis.fileName.Contains("/") Then
@@ -97,6 +97,8 @@
 
                     TreeView1.Nodes(currentTZarc).Expand()
                     currentTZarc = currentTZarc + 1
+
+                    FileStr.Close()
 
                 Catch ex As Exception
                     MessageBox.Show(ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
@@ -143,12 +145,12 @@
 
     End Function
 
-    Function ParseInteger32(ByRef b As Byte(), ByVal pos As Integer) As Integer
-        Return BitConverter.ToInt32(RevHex(b, pos, 4), 0)
+    Function ParseUInt32(ByRef b As Byte()) As UInteger
+        Return BitConverter.ToUInt32(RevHex(b, 0, 4), 0)
     End Function
 
-    Function ParseInteger64(ByRef b As Byte(), ByVal pos As Integer) As Long
-        Return BitConverter.ToInt64(RevHex(b, pos, 8), 0)
+    Function ParseUInt64(ByRef b As Byte()) As ULong
+        Return BitConverter.ToUInt64(RevHex(b, 0, 8), 0)
     End Function
 
     Function ToInteger32(ByVal i As Integer) As Byte()
