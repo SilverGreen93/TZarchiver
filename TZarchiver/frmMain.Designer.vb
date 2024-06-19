@@ -39,60 +39,67 @@ Partial Class frmMain
         'lstArchives
         '
         Me.lstArchives.FormattingEnabled = True
-        Me.lstArchives.ItemHeight = 16
-        Me.lstArchives.Location = New System.Drawing.Point(12, 28)
+        Me.lstArchives.ItemHeight = 15
+        Me.lstArchives.Location = New System.Drawing.Point(10, 27)
+        Me.lstArchives.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.lstArchives.Name = "lstArchives"
-        Me.lstArchives.Size = New System.Drawing.Size(244, 196)
+        Me.lstArchives.Size = New System.Drawing.Size(214, 184)
         Me.lstArchives.TabIndex = 0
         '
         'btnExtract
         '
-        Me.btnExtract.Location = New System.Drawing.Point(12, 230)
+        Me.btnExtract.Location = New System.Drawing.Point(10, 216)
+        Me.btnExtract.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.btnExtract.Name = "btnExtract"
-        Me.btnExtract.Size = New System.Drawing.Size(122, 49)
+        Me.btnExtract.Size = New System.Drawing.Size(107, 46)
         Me.btnExtract.TabIndex = 2
         Me.btnExtract.Text = "Extract TZarc"
         Me.btnExtract.UseVisualStyleBackColor = True
         '
         'tvContents
         '
-        Me.tvContents.Location = New System.Drawing.Point(352, 29)
+        Me.tvContents.Location = New System.Drawing.Point(308, 28)
+        Me.tvContents.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.tvContents.Name = "tvContents"
-        Me.tvContents.Size = New System.Drawing.Size(284, 250)
+        Me.tvContents.Size = New System.Drawing.Size(249, 235)
         Me.tvContents.TabIndex = 4
         '
         'btnCreate
         '
-        Me.btnCreate.Location = New System.Drawing.Point(140, 230)
+        Me.btnCreate.Location = New System.Drawing.Point(122, 216)
+        Me.btnCreate.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.btnCreate.Name = "btnCreate"
-        Me.btnCreate.Size = New System.Drawing.Size(116, 49)
+        Me.btnCreate.Size = New System.Drawing.Size(102, 46)
         Me.btnCreate.TabIndex = 5
         Me.btnCreate.Text = "Create TZarc"
         Me.btnCreate.UseVisualStyleBackColor = True
         '
         'btnRemove
         '
-        Me.btnRemove.Location = New System.Drawing.Point(263, 29)
+        Me.btnRemove.Location = New System.Drawing.Point(230, 28)
+        Me.btnRemove.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.btnRemove.Name = "btnRemove"
-        Me.btnRemove.Size = New System.Drawing.Size(83, 50)
+        Me.btnRemove.Size = New System.Drawing.Size(72, 47)
         Me.btnRemove.TabIndex = 6
         Me.btnRemove.Text = "Remove item"
         Me.btnRemove.UseVisualStyleBackColor = True
         '
         'Label1
         '
-        Me.Label1.Location = New System.Drawing.Point(263, 147)
+        Me.Label1.Location = New System.Drawing.Point(230, 137)
+        Me.Label1.Margin = New System.Windows.Forms.Padding(2, 0, 2, 0)
         Me.Label1.Name = "Label1"
-        Me.Label1.Size = New System.Drawing.Size(83, 95)
+        Me.Label1.Size = New System.Drawing.Size(72, 89)
         Me.Label1.TabIndex = 7
         Me.Label1.Text = "Drag && Drop files to extract and folders to create!"
         Me.Label1.TextAlign = System.Drawing.ContentAlignment.TopCenter
         '
         'btnClear
         '
-        Me.btnClear.Location = New System.Drawing.Point(264, 85)
+        Me.btnClear.Location = New System.Drawing.Point(231, 80)
+        Me.btnClear.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.btnClear.Name = "btnClear"
-        Me.btnClear.Size = New System.Drawing.Size(82, 50)
+        Me.btnClear.Size = New System.Drawing.Size(72, 47)
         Me.btnClear.TabIndex = 8
         Me.btnClear.Text = "Clear list"
         Me.btnClear.UseVisualStyleBackColor = True
@@ -100,9 +107,10 @@ Partial Class frmMain
         'lnkGitHub
         '
         Me.lnkGitHub.AutoSize = True
-        Me.lnkGitHub.Location = New System.Drawing.Point(188, 309)
+        Me.lnkGitHub.Location = New System.Drawing.Point(164, 290)
+        Me.lnkGitHub.Margin = New System.Windows.Forms.Padding(2, 0, 2, 0)
         Me.lnkGitHub.Name = "lnkGitHub"
-        Me.lnkGitHub.Size = New System.Drawing.Size(269, 16)
+        Me.lnkGitHub.Size = New System.Drawing.Size(244, 15)
         Me.lnkGitHub.TabIndex = 10
         Me.lnkGitHub.TabStop = True
         Me.lnkGitHub.Text = "https://github.com/SilverGreen93/TZarchiver"
@@ -110,36 +118,39 @@ Partial Class frmMain
         'Label2
         '
         Me.Label2.AutoSize = True
-        Me.Label2.Location = New System.Drawing.Point(243, 293)
+        Me.Label2.Location = New System.Drawing.Point(212, 275)
+        Me.Label2.Margin = New System.Windows.Forms.Padding(2, 0, 2, 0)
         Me.Label2.Name = "Label2"
-        Me.Label2.Size = New System.Drawing.Size(159, 16)
+        Me.Label2.Size = New System.Drawing.Size(148, 15)
         Me.Label2.TabIndex = 9
         Me.Label2.Text = "by SilverGreen93 (c) 2024"
         '
         'Label3
         '
         Me.Label3.AutoSize = True
-        Me.Label3.Location = New System.Drawing.Point(12, 8)
+        Me.Label3.Location = New System.Drawing.Point(10, 7)
+        Me.Label3.Margin = New System.Windows.Forms.Padding(2, 0, 2, 0)
         Me.Label3.Name = "Label3"
-        Me.Label3.Size = New System.Drawing.Size(119, 16)
+        Me.Label3.Size = New System.Drawing.Size(109, 15)
         Me.Label3.TabIndex = 11
         Me.Label3.Text = "Processing queue:"
         '
         'Label4
         '
         Me.Label4.AutoSize = True
-        Me.Label4.Location = New System.Drawing.Point(349, 8)
+        Me.Label4.Location = New System.Drawing.Point(306, 7)
+        Me.Label4.Margin = New System.Windows.Forms.Padding(2, 0, 2, 0)
         Me.Label4.Name = "Label4"
-        Me.Label4.Size = New System.Drawing.Size(108, 16)
+        Me.Label4.Size = New System.Drawing.Size(98, 15)
         Me.Label4.TabIndex = 12
         Me.Label4.Text = "Archive contents:"
         '
         'frmMain
         '
         Me.AllowDrop = True
-        Me.AutoScaleDimensions = New System.Drawing.SizeF(8.0!, 16.0!)
+        Me.AutoScaleDimensions = New System.Drawing.SizeF(7.0!, 15.0!)
         Me.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font
-        Me.ClientSize = New System.Drawing.Size(648, 336)
+        Me.ClientSize = New System.Drawing.Size(567, 315)
         Me.Controls.Add(Me.Label4)
         Me.Controls.Add(Me.Label3)
         Me.Controls.Add(Me.lnkGitHub)
@@ -151,8 +162,10 @@ Partial Class frmMain
         Me.Controls.Add(Me.tvContents)
         Me.Controls.Add(Me.btnExtract)
         Me.Controls.Add(Me.lstArchives)
+        Me.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(204, Byte))
         Me.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle
         Me.Icon = CType(resources.GetObject("$this.Icon"), System.Drawing.Icon)
+        Me.Margin = New System.Windows.Forms.Padding(2, 2, 2, 2)
         Me.MaximizeBox = False
         Me.Name = "frmMain"
         Me.Text = "TZarchiver v1.3"
