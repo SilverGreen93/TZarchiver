@@ -7,7 +7,7 @@ Public Class frmMain
     Private Sub frmMain_DragDrop(sender As Object, e As DragEventArgs) Handles Me.DragDrop
         Dim files As String() = e.Data.GetData(DataFormats.FileDrop)
         For Each file As String In files
-            lstArchives.Items.Add(System.IO.Path.GetFileName(file))
+            lstArchives.Items.Add(Path.GetFileName(file))
             lstArchives.SelectedIndex = lstArchives.Items.Count - 1
             fileList.Add(file)
         Next
@@ -31,11 +31,10 @@ Public Class frmMain
         For Each file As String In fileList
 
             If My.Computer.FileSystem.FileExists(file) Then 'extract tzarc
+                Dim FileStr As BinaryReader
 
                 Try
-                    tvContents.Nodes.Add(System.IO.Path.GetFileName(file))
-
-                    Dim FileStr As New BinaryReader(IO.File.Open(file, FileMode.Open))
+                    FileStr = New BinaryReader(IO.File.Open(file, FileMode.Open))
                     FileStr.BaseStream.Seek(0, SeekOrigin.Begin)
 
                     Dim ExpectedSignature As Byte() = System.Text.Encoding.ASCII.GetBytes("TZac")
@@ -44,15 +43,17 @@ Public Class frmMain
                     FileSignature = FileStr.ReadBytes(ExpectedSignature.Length)
 
                     If Not CompareBytes(FileSignature, ExpectedSignature) Then
+                        FileStr.Close()
                         Throw New Exception("File format not supported for " & file)
-                        Continue For
                     End If
 
                     Dim fileVersion As UInteger = ParseUInt32(FileStr.ReadBytes(4))
                     If fileVersion <> 1 Then
+                        FileStr.Close()
                         Throw New Exception("TZarc version " & fileVersion & " is not supported!")
-                        Continue For
                     End If
+
+                    tvContents.Nodes.Add(Path.GetFileName(file))
 
                     Dim fileCount As UInteger = ParseUInt32(FileStr.ReadBytes(4))
 
@@ -76,20 +77,21 @@ Public Class frmMain
 
                     FileStr.ReadUInt32() 'skip random time data
 
-                    Dim currentPath As String = System.IO.Path.GetDirectoryName(file) & "\" & System.IO.Path.GetFileNameWithoutExtension(file)
+                    Dim currentPath As String = Path.GetDirectoryName(file) & "\" & Path.GetFileNameWithoutExtension(file)
                     If mode Then My.Computer.FileSystem.CreateDirectory(currentPath)
 
                     If mode Then
                         For Each fis In filesInside
                             Dim currentData(fis.fileLength - 1) As Byte
                             If fis.fileLength > Integer.MaxValue Then
+                                FileStr.Close()
                                 Throw New Exception("Internal filesize for " & fis.fileName & " exceeds " & Integer.MaxValue & " !")
                             End If
                             Array.Copy(FileStr.ReadBytes(fis.fileLength), 0, currentData, 0, CInt(fis.fileLength))
 
                             'ensure we have all the subdirectories required
                             If fis.fileName.Contains("/") Then
-                                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(currentPath & "\" & fis.fileName))
+                                Directory.CreateDirectory(Path.GetDirectoryName(currentPath & "\" & fis.fileName))
                             End If
                             My.Computer.FileSystem.WriteAllBytes(currentPath & "\" & fis.fileName, currentData, False)
                         Next
@@ -180,7 +182,7 @@ Public Class frmMain
                     Dim bytes As New List(Of Byte)
                     bytes.AddRange(System.Text.Encoding.ASCII.GetBytes("TZac"))
 
-                    Dim filesToAdd As String() = System.IO.Directory.GetFiles(file, "*", System.IO.SearchOption.AllDirectories)
+                    Dim filesToAdd As String() = Directory.GetFiles(file, "*", SearchOption.AllDirectories)
 
                     Dim fileCount As Integer = filesToAdd.Length
                     bytes.AddRange({0, 0, 0, 1})
@@ -223,7 +225,7 @@ Public Class frmMain
         Dim files As String() = My.Application.CommandLineArgs.ToArray
         If files.Length > 0 Then
             For Each file As String In files
-                lstArchives.Items.Add(System.IO.Path.GetFileName(file))
+                lstArchives.Items.Add(Path.GetFileName(file))
                 lstArchives.SelectedIndex = lstArchives.Items.Count - 1
                 fileList.Add(file)
             Next
@@ -240,7 +242,7 @@ Public Class frmMain
         If args.Length > 0 Then
             Dim files As String() = args.ToArray
             For Each file As String In files
-                lstArchives.Items.Add(System.IO.Path.GetFileName(file))
+                lstArchives.Items.Add(Path.GetFileName(file))
                 lstArchives.SelectedIndex = lstArchives.Items.Count - 1
                 fileList.Add(file)
             Next
