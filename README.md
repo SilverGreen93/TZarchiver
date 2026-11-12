@@ -2,6 +2,8 @@
 
 Utility application to read and write Trainz `.tzarc` files.
 
+![screenshot](assets/screenshot.png)
+
 **Note** that Trainz 2022 changed the TZarc format to v2, with zlib
 compression. Both reading and writing v2 archives are supported here: from the
 command line with `--v2`, or in the GUI with the "Create compressed v2
