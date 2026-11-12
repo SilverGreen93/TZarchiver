@@ -1,0 +1,3 @@
+Primary=1.tga
+Alpha=1.bmp
+Tile=st
