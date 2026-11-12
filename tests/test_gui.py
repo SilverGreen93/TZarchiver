@@ -188,6 +188,40 @@ def test_bad_archives_are_reported_but_stay_listed(window, dialogs):
     assert [kind for kind, _ in dialogs] == ["error"]
 
 
+def test_the_same_path_dropped_twice_is_queued_once(window):
+    window.load_paths([str(FOLDER_ARCHIVE)])
+    window.load_paths([str(FOLDER_ARCHIVE)])
+    assert window.extract_files == [str(FOLDER_ARCHIVE)]
+    assert window.tv_extract.topLevelItemCount() == 1
+    window.load_paths([str(FOLDER), str(FOLDER)])  # duplicates within one drop too
+    assert window.create_dirs == [str(FOLDER)]
+    assert window.tv_create.topLevelItemCount() == 1
+
+
+def test_duplicate_detection_compares_the_whole_path(window, tmp_path):
+    # same basename, different folders: both must be queued
+    sibling = tmp_path / "copy"
+    sibling.mkdir()
+    other = sibling / FOLDER.name
+    other.mkdir()
+    window.load_paths([str(FOLDER)])
+    window.load_paths([str(other)])
+    assert window.create_dirs == [str(FOLDER), str(other)]
+    # same path, different spelling: case and separators must count as once
+    spelled = str(FOLDER).replace("\\", "/").lower()
+    assert spelled != str(FOLDER)
+    window.load_paths([spelled])
+    assert window.create_dirs == [str(FOLDER), str(other)]
+    assert window.tv_create.topLevelItemCount() == 2
+
+
+def test_clear_allows_the_same_path_to_be_queued_again(window):
+    window.load_paths([str(FOLDER)])
+    window.on_clear()
+    window.load_paths([str(FOLDER)])
+    assert window.create_dirs == [str(FOLDER)]
+
+
 def test_clear_empties_only_the_current_tab(window):
     window.load_paths([str(FOLDER_ARCHIVE)])
     window.load_paths([str(FOLDER)])

@@ -9,6 +9,7 @@ the tabs.  The compressed v2 checkbox belongs to the Create tab only.
 
 from __future__ import annotations
 
+import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -71,11 +72,23 @@ def _window_icon() -> QIcon | None:
     return QIcon(path) if path else None
 
 
+def _lookup_key(path: str) -> str:
+    """One comparable spelling for one path, for duplicate drop detection.
+
+    normpath folds ".\\a\\..\\b" style segments and normcase makes the result
+    case- and separator-insensitive on Windows, so the same folder dropped via
+    Explorer and typed by hand counts once.
+    """
+    return os.path.normcase(os.path.normpath(path))
+
+
 class TzarcWindow(QWidget):
     def __init__(self, paths: list[str] | None = None) -> None:
         super().__init__()
         self.extract_files: list[str] = []
         self.create_dirs: list[str] = []
+        self._seen_files: set[str] = set()
+        self._seen_dirs: set[str] = set()
         self._build()
         self.setAcceptDrops(True)
         if paths:
@@ -189,6 +202,10 @@ class TzarcWindow(QWidget):
             self.tabs.setCurrentIndex(EXTRACT_TAB)
 
     def _add_extract_file(self, path: str) -> None:
+        key = _lookup_key(path)
+        if key in self._seen_files:
+            return  # the exact same file is already queued
+        self._seen_files.add(key)
         self._drop_placeholder(self.tv_extract)
         self.extract_files.append(path)
         self._update_buttons()
@@ -204,6 +221,10 @@ class TzarcWindow(QWidget):
         root.setExpanded(True)
 
     def _add_create_folder(self, path: str) -> None:
+        key = _lookup_key(path)
+        if key in self._seen_dirs:
+            return  # the exact same folder is already queued
+        self._seen_dirs.add(key)
         self._drop_placeholder(self.tv_create)
         self.create_dirs.append(path)
         self._update_buttons()
@@ -248,9 +269,11 @@ class TzarcWindow(QWidget):
         """Empty the list of the tab on screen and show its hint again."""
         if self.tabs.currentIndex() == CREATE_TAB:
             self.create_dirs.clear()
+            self._seen_dirs.clear()
             self._reset_placeholder(self.tv_create, PLACEHOLDER_CREATE)
         else:
             self.extract_files.clear()
+            self._seen_files.clear()
             self._reset_placeholder(self.tv_extract, PLACEHOLDER_EXTRACT)
         self._update_buttons()
 
