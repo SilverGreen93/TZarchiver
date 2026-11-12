@@ -34,7 +34,7 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parent
 APP_NAME = "TZarchiver"
 AUTHOR = "SilverGreen93"
-VERSION = "1.3.0"
+VERSION = "2.0"
 ICON_ICO = ROOT / "assets" / "175.ico"
 ICON_PNG = ROOT / "assets" / "tzarchiver.png"  # for the .desktop entry / dmg (optional)
 GUI_ENTRY = ROOT / "tzarchiver_gui_entry.py"
@@ -92,7 +92,7 @@ def bundled_assets() -> list[str]:
 
 def _version_parts(count: int = 4) -> tuple[int, ...]:
     """VERSION as a zero padded tuple of ints: the PE version resource wants
-    four numbers, so "1.3.0" becomes (1, 3, 0, 0)."""
+    four numbers, so "2.0" becomes (2, 0, 0, 0)."""
     numbers = [int(part) for part in VERSION.split(".") if part.isdigit()]
     return tuple((numbers + [0] * count)[:count])
 
