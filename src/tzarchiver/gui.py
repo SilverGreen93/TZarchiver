@@ -1,8 +1,10 @@
 """PyQt6 GUI for TZarchiver.
 
-Port of frmMain (WinForms): a processing queue on the left, the contents of the
-queued archives on the right, and Extract / Create / Remove item / Clear list
-buttons.  Files and folders can be dragged into the window.
+A resizable portrait window with a tabbed queue: the Extract tab lists the
+tzarc files dropped on the window (each expanded with its contents), the
+Create tab lists the folders to archive (expanded with their files).  The
+Extract all / Create all button for the current tab and Clear list sit below
+the tabs.  The compressed v2 checkbox belongs to the Create tab only.
 """
 
 from __future__ import annotations
@@ -11,18 +13,16 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -46,7 +46,10 @@ _ASSET_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 APP_TITLE = f"TZarchiver {__version__}"
 GITHUB_URL = "https://github.com/SilverGreen93/TZarchiver"
 ICON_FILE = "175.ico"
-HINT = "Drag & Drop files to extract and folders to create!"
+PLACEHOLDER_EXTRACT = "Drag & drop tzarc files here"
+PLACEHOLDER_CREATE = "Drag & drop folders here"
+
+EXTRACT_TAB, CREATE_TAB = 0, 1
 
 
 def _resource_path(name: str) -> str | None:
@@ -71,11 +74,12 @@ def _window_icon() -> QIcon | None:
 class TzarcWindow(QWidget):
     def __init__(self, paths: list[str] | None = None) -> None:
         super().__init__()
-        self.queue: list[str] = []
+        self.extract_files: list[str] = []
+        self.create_dirs: list[str] = []
         self._build()
         self.setAcceptDrops(True)
         if paths:
-            self.load_paths(paths, list_only=True)
+            self.load_paths(paths)
 
     # -- layout -------------------------------------------------------------
     def _build(self) -> None:
@@ -88,59 +92,36 @@ class TzarcWindow(QWidget):
         outer.setContentsMargins(10, 8, 10, 6)
         outer.setSpacing(6)
 
-        columns = QHBoxLayout()
-        columns.setSpacing(10)
+        # the tabbed queue: one independent tree per tab
+        self.tabs = QTabWidget()
+        self.tv_extract = self._make_tree(PLACEHOLDER_EXTRACT)
+        self.tabs.addTab(self.tv_extract, "Extract")
 
-        # queue column: list plus the two action buttons below it
-        left = QVBoxLayout()
-        left.setSpacing(4)
-        left.addWidget(QLabel("Processing queue:"))
-        self.lst_archives = QListWidget()
-        self.lst_archives.setMinimumSize(214, 184)
-        left.addWidget(self.lst_archives, 1)
+        self.tv_create = self._make_tree(PLACEHOLDER_CREATE)
+        self.chk_v2 = QCheckBox("Create compressed v2 archives")
+        create_tab = QWidget()
+        create_layout = QVBoxLayout(create_tab)
+        create_layout.setContentsMargins(0, 0, 0, 0)
+        create_layout.addWidget(self.tv_create, 1)
+        create_layout.addWidget(self.chk_v2)
+        self.tabs.addTab(create_tab, "Create")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        outer.addWidget(self.tabs, 1)
 
-        buttons = QHBoxLayout()
-        buttons.setSpacing(4)
-        self.btn_extract = QPushButton("Extract TZarc")
-        self.btn_create = QPushButton("Create TZarc")
+        # action row below the tabs; only the current tab's button is shown
+        actions = QHBoxLayout()
+        actions.setSpacing(4)
+        self.btn_extract = QPushButton("Extract all")
+        self.btn_create = QPushButton("Create all")
+        self.btn_clear = QPushButton("Clear list")
         for button in (self.btn_extract, self.btn_create):
             button.setMinimumSize(105, 46)
-        buttons.addWidget(self.btn_extract)
-        buttons.addWidget(self.btn_create)
-        left.addLayout(buttons)
-
-        self.chk_v2 = QCheckBox("Create compressed v2 archives")
-        left.addWidget(self.chk_v2)
-        columns.addLayout(left)
-
-        # middle column: queue maintenance and the drag hint
-        middle = QVBoxLayout()
-        middle.setSpacing(4)
-        self.btn_remove = QPushButton("Remove item")
-        self.btn_clear = QPushButton("Clear list")
-        for button in (self.btn_remove, self.btn_clear):
-            button.setMinimumSize(72, 47)
-        middle.addWidget(self.btn_remove)
-        middle.addWidget(self.btn_clear)
-        hint = QLabel(HINT)
-        hint.setWordWrap(True)
-        hint.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        hint.setMinimumWidth(72)
-        middle.addWidget(hint, 1)
-        middle.addStretch(0)
-        columns.addLayout(middle)
-
-        # contents column
-        right = QVBoxLayout()
-        right.setSpacing(4)
-        right.addWidget(QLabel("Archive contents:"))
-        self.tv_contents = QTreeWidget()
-        self.tv_contents.setHeaderHidden(True)
-        self.tv_contents.setMinimumSize(249, 235)
-        right.addWidget(self.tv_contents, 1)
-        columns.addLayout(right)
-
-        outer.addLayout(columns, 1)
+        self.btn_clear.setMinimumSize(72, 47)
+        actions.addWidget(self.btn_extract)
+        actions.addWidget(self.btn_create)
+        actions.addStretch(1)
+        actions.addWidget(self.btn_clear)
+        outer.addLayout(actions)
 
         footer = QHBoxLayout()
         footer.addWidget(QLabel("\u00a9 2026 SilverGreen93"))
@@ -154,70 +135,81 @@ class TzarcWindow(QWidget):
 
         self.btn_extract.clicked.connect(self.on_extract)
         self.btn_create.clicked.connect(self.on_create)
-        self.btn_remove.clicked.connect(self.on_remove)
         self.btn_clear.clicked.connect(self.on_clear)
 
-        self.setFixedSize(max(self.sizeHint().width(), 567), max(self.sizeHint().height(), 315))
+        self._on_tab_changed(self.tabs.currentIndex())
+        self.setMinimumSize(380, 480)
+        self.resize(430, 640)  # portrait on startup
 
-    # -- queue ---------------------------------------------------------------
-    def load_paths(self, paths: list[str], list_only: bool = True) -> None:
-        """Add paths to the queue and refresh the contents tree (like frmMain_Load)."""
-        for path in paths:
-            self.queue.append(str(path))
-            self.lst_archives.addItem(QListWidgetItem(Path(path).name))
-            self.lst_archives.setCurrentRow(self.lst_archives.count() - 1)
-        if list_only:
-            self.show_contents()
+    @staticmethod
+    def _make_tree(placeholder: str) -> QTreeWidget:
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+        TzarcWindow._reset_placeholder(tree, placeholder)
+        return tree
 
-    def add_files_dialog(self) -> None:
-        """Pick archives to queue (also reachable by dropping them on the window)."""
-        files, _ = QFileDialog.getOpenFileNames(self, "Select tzarc files", "", "Trainz archives (*.tzarc);;All files (*.*)")
-        if files:
-            self.load_paths(files)
+    # -- placeholders ---------------------------------------------------------
+    @staticmethod
+    def _reset_placeholder(tree: QTreeWidget, text: str) -> None:
+        """Show the greyed drag hint as the tree's only item."""
+        tree.clear()
+        item = QTreeWidgetItem([text])
+        item.setDisabled(True)
+        tree.addTopLevelItem(item)
 
-    def add_folder_dialog(self) -> None:
-        """Pick a folder to queue for archiving."""
-        folder = QFileDialog.getExistingDirectory(self, "Select folder to archive")
-        if folder:
-            self.load_paths([folder])
+    @staticmethod
+    def _drop_placeholder(tree: QTreeWidget) -> None:
+        """Remove the drag hint as soon as a real entry arrives."""
+        if tree.topLevelItemCount() == 1 and tree.topLevelItem(0).isDisabled():
+            tree.takeTopLevelItem(0)
 
-    def on_remove(self) -> None:
-        row = self.lst_archives.currentRow()
-        if row < 0:
-            return
-        self.lst_archives.takeItem(row)
-        del self.queue[row]
-        if row < self.tv_contents.topLevelItemCount():
-            self.tv_contents.takeTopLevelItem(row)
-        self.lst_archives.setCurrentRow(self.lst_archives.count() - 1)
+    def _on_tab_changed(self, index: int) -> None:
+        self.btn_extract.setVisible(index == EXTRACT_TAB)
+        self.btn_create.setVisible(index == CREATE_TAB)
 
-    def on_clear(self) -> None:
-        self.lst_archives.clear()
-        self.tv_contents.clear()
-        self.queue.clear()
+    # -- queue ------------------------------------------------------------------
+    def load_paths(self, paths: list[str]) -> None:
+        """Sort dropped paths into their tab and switch to the busiest one."""
+        files = [str(path) for path in paths if Path(path).is_file()]
+        folders = [str(path) for path in paths if Path(path).is_dir()]
+        for path in files:
+            self._add_extract_file(path)
+        for path in folders:
+            self._add_create_folder(path)
+        if len(folders) > len(files):
+            self.tabs.setCurrentIndex(CREATE_TAB)
+        elif files or folders:
+            self.tabs.setCurrentIndex(EXTRACT_TAB)
 
-    # -- contents tree -------------------------------------------------------
-    def show_contents(self) -> None:
-        """Fill the tree with the contents of every queued archive (read only)."""
-        self.tv_contents.clear()
-        for path in self.queue:
-            if not Path(path).is_file():
-                continue
-            try:
-                archive = read_archive(path)
-            except (TzarcError, OSError) as exc:
-                self._error(exc, path)
-                continue
-            root = QTreeWidgetItem([Path(path).name])
-            self.tv_contents.addTopLevelItem(root)
+    def _add_extract_file(self, path: str) -> None:
+        self._drop_placeholder(self.tv_extract)
+        self.extract_files.append(path)
+        root = QTreeWidgetItem([Path(path).name])
+        self.tv_extract.addTopLevelItem(root)
+        try:
+            archive = read_archive(path)
+        except (TzarcError, OSError) as exc:
+            self._error(exc, path)
+        else:
             for entry in archive.entries:
                 root.addChild(QTreeWidgetItem([entry.name]))
-            root.setExpanded(True)
+        root.setExpanded(True)
+
+    def _add_create_folder(self, path: str) -> None:
+        self._drop_placeholder(self.tv_create)
+        self.create_dirs.append(path)
+        root = QTreeWidgetItem([Path(path).name])
+        self.tv_create.addTopLevelItem(root)
+        base = Path(path)
+        for child in sorted(base.rglob("*")):
+            if child.is_file():
+                root.addChild(QTreeWidgetItem([child.relative_to(base).as_posix()]))
+        root.setExpanded(True)
 
     # -- actions --------------------------------------------------------------
     def on_extract(self) -> None:
-        """Extract every queued archive, as the Extract TZarc button did."""
-        for path in self.queue:
+        """Extract every queued archive, as the Extract all button does."""
+        for path in self.extract_files:
             if not Path(path).is_file():
                 continue
             try:
@@ -229,14 +221,12 @@ class TzarcWindow(QWidget):
         self._info("Finished extracting files")
 
     def on_create(self) -> None:
-        """Archive every queued folder, as the Create TZarc button did.
+        """Archive every queued folder, as the Create all button does.
 
         The compressed v2 checkbox switches the output to version 2.
         """
         version = V2 if self.chk_v2.isChecked() else V1
-        for path in self.queue:
-            if Path(path).is_file():
-                continue
+        for path in self.create_dirs:
             try:
                 archive = create_archive(path, version=version)
                 archive.write(str(path) + ".tzarc", version=version)
@@ -244,6 +234,15 @@ class TzarcWindow(QWidget):
                 self._error(exc, path)
                 continue
         self._info("Finished creating archives")
+
+    def on_clear(self) -> None:
+        """Empty the list of the tab on screen and show its hint again."""
+        if self.tabs.currentIndex() == CREATE_TAB:
+            self.create_dirs.clear()
+            self._reset_placeholder(self.tv_create, PLACEHOLDER_CREATE)
+        else:
+            self.extract_files.clear()
+            self._reset_placeholder(self.tv_extract, PLACEHOLDER_EXTRACT)
 
     # -- drag and drop --------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt naming
