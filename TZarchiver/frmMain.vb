@@ -48,7 +48,10 @@ Public Class frmMain
                     End If
 
                     Dim fileVersion As UInteger = ParseUInt32(FileStr.ReadBytes(4))
-                    If fileVersion <> 1 Then
+                    If fileVersion = 2 Then
+                        'v2: rest of the archive is a v1 body split into zlib-compressed blocks
+                        FileStr = New BinaryReader(New TzarcV2Stream(FileStr.BaseStream))
+                    ElseIf fileVersion <> 1 Then
                         FileStr.Close()
                         Throw New Exception("TZarc version " & fileVersion & " is not supported!")
                     End If
