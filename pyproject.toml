@@ -8,6 +8,7 @@ dependencies = []
 [project.optional-dependencies]
 gui = ["PyQt6>=6.5"]
 test = ["pytest>=7"]
+build = ["pyinstaller>=6", "pillow>=10"]  # pillow: PyInstaller converts .ico -> .icns on macOS
 
 [project.scripts]
 tzarchiver = "tzarchiver.cli:main"

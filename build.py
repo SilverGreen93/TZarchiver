@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""Build distributable packages for TZarchiver.
+
+PyInstaller cannot cross-compile, so this script builds what its host OS
+supports:
+
+    Windows       -> dist/TZarchiver.exe           (one-file, GUI)
+                     dist/TZarchiverCli.exe        (one-file, console CLI)
+                     dist/TZarchiver-<ver>-windows.zip  (both exes, released)
+    macOS         -> dist/TZarchiver-<ver>.dmg     (.app bundle + hdiutil)
+    Linux (deb)   -> dist/tzarchiver_<ver>_amd64.deb   (needs fpm or dpkg)
+    Linux (zst)   -> dist/tzarchiver-<ver>-x86_64.pkg.tar.zst (needs fpm)
+
+Usage:
+    python build.py            # build all artifacts available on this host
+    python build.py --only exe|dmg|deb|zst   # build one artifact
+
+The version in pyproject.toml and VERSION below must be kept in sync.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path, PurePosixPath
+
+ROOT = Path(__file__).resolve().parent
+APP_NAME = "TZarchiver"
+AUTHOR = "SilverGreen93"
+VERSION = "1.3.0"
+ICON_ICO = ROOT / "assets" / "175.ico"
+ICON_PNG = ROOT / "assets" / "tzarchiver.png"  # for the .desktop entry / dmg (optional)
+GUI_ENTRY = ROOT / "tzarchiver_gui_entry.py"
+CLI_ENTRY = ROOT / "tzarchiver_cli_entry.py"
+DIST = ROOT / "dist"
+
+
+def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    print("+", " ".join(str(c) for c in cmd))
+    return subprocess.run([str(c) for c in cmd], check=True, **kw)
+
+
+def have(prog: str) -> bool:
+    return shutil.which(prog) is not None
+
+
+def _pyinstaller(name: str, entry: Path, extra: list[str]) -> None:
+    icon = ["--icon", str(ICON_ICO)] if ICON_ICO.is_file() else []
+    hooks_dir = ["--additional-hooks-dir", str(ROOT / "hooks")] if (ROOT / "hooks").is_dir() else []
+    # make src/ importable even when the package is not installed in the build env
+    pypath = [str(ROOT / "src")]
+    if env_pp := os.environ.get("PYTHONPATH"):
+        pypath.append(env_pp)
+    run([
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--name", name,
+        "--distpath", str(DIST),
+        "--workpath", str(ROOT / "build"),
+        "--specpath", str(ROOT / "build"),
+        *icon,
+        *hooks_dir,
+        *extra,
+        str(entry),
+    ], env={**os.environ, "PYTHONPATH": os.pathsep.join(pypath)})
+
+
+def hidden_imports() -> list[str]:
+    return ["--hidden-import", "tzarchiver.gui"]
+
+
+def bundled_assets() -> list[str]:
+    """Ship the icon inside the bundle so the GUI can set its window icon.
+
+    --icon only stamps the exe file itself; the running window (titlebar and
+    taskbar) reads the .ico through gui._resource_path(), which looks inside
+    sys._MEIPASS, so the file has to be bundled as data as well.
+    """
+    flags: list[str] = []
+    for asset in (ICON_ICO,):
+        if asset.is_file():
+            flags += ["--add-data", f"{asset}{os.pathsep}."]
+    return flags
+
+
+def _version_parts(count: int = 4) -> tuple[int, ...]:
+    """VERSION as a zero padded tuple of ints: the PE version resource wants
+    four numbers, so "1.3.0" becomes (1, 3, 0, 0)."""
+    numbers = [int(part) for part in VERSION.split(".") if part.isdigit()]
+    return tuple((numbers + [0] * count)[:count])
+
+
+def version_file(name: str, description: str) -> list[str]:
+    """--version-file flags, so the exe carries file/product version and name.
+
+    Windows shows these in the file's Properties dialog and in the taskbar
+    group name; without a version resource the exe reports nothing at all.
+    """
+    from PyInstaller.utils.win32 import versioninfo as vi
+
+    path = ROOT / "build" / f"{name}.version.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    info = vi.VSVersionInfo(
+        ffi=vi.FixedFileInfo(
+            filevers=_version_parts(),
+            prodvers=_version_parts(),
+            mask=0x3F,
+            flags=0x0,
+            OS=0x40004,  # VOS_NT_WINDOWS32
+            fileType=0x1,  # VFT_APP
+            subtype=0x0,
+            date=(0, 0),
+        ),
+        kids=[
+            vi.StringFileInfo([
+                vi.StringTable("040904B0", [
+                    vi.StringStruct("FileDescription", description),
+                    vi.StringStruct("FileVersion", VERSION),
+                    vi.StringStruct("InternalName", name),
+                    vi.StringStruct("OriginalFilename", f"{name}.exe"),
+                    vi.StringStruct("ProductName", APP_NAME),
+                    vi.StringStruct("ProductVersion", VERSION),
+                    vi.StringStruct("CompanyName", AUTHOR),
+                    vi.StringStruct("LegalCopyright",
+                                    f"© {datetime.date.today().year} {AUTHOR}"),
+                ]),
+            ]),
+            vi.VarFileInfo([vi.VarStruct("Translation", [0x409, 1200])]),
+        ],
+    )
+    # str(info) is the format PyInstaller reads back with eval() in
+    # load_version_info_from_text_file (repr() qualifies the names and fails).
+    path.write_text(str(info), encoding="utf-8")
+    return ["--version-file", str(path)]
+
+
+# Qt modules we don't use (widgets-only app: QtCore/QtGui/QtWidgets). Excluding
+# them prevents PyInstaller from bundling Qt6Qml, Qt6Quick, Qt6QuickControls2*,
+# Qt6Designer, Qt6Network + OpenSSL, etc. (~30 MB on Windows).
+_EXCLUDED_QT = [
+    "PyQt6.QtQml",
+    "PyQt6.QtQuick",
+    "PyQt6.QtQuickControls2",
+    "PyQt6.QtQuickWidgets",
+    "PyQt6.QtDesigner",
+    "PyQt6.QtTest",
+    "PyQt6.QtNetwork",
+]
+
+# The CLI exe never touches the GUI, so exclude Qt bindings entirely: that
+# drops PyQt6 (including its sip module) and all Qt DLLs (~35 MB) from
+# TZarchiverCli.exe.
+_EXCLUDED_CLI = ["PyQt6"]
+
+
+def _excludes(cli: bool = False) -> list[str]:
+    flags: list[str] = []
+    mods = _EXCLUDED_CLI if cli else _EXCLUDED_QT
+    for mod in mods:
+        flags += ["--exclude-module", mod]
+    return flags
+
+
+# --------------------------------------------------------------------------
+# Windows: two one-file exes - TZarchiver.exe (GUI), TZarchiverCli.exe (CLI)
+# --------------------------------------------------------------------------
+
+def build_exe() -> list[Path]:
+    # A windowed (GUI-subsystem) exe cannot write to the console when invoked
+    # from a terminal, so the GUI and CLI ship as separate exes:
+    #   TZarchiver.exe    --windowed: double-click opens the GUI, no terminal flash
+    #   TZarchiverCli.exe --console : normal console stdout/stderr for CLI use
+    _pyinstaller(APP_NAME, GUI_ENTRY,
+                 ["--onefile", "--windowed", *hidden_imports(), *bundled_assets(),
+                  *version_file(APP_NAME, "TZarchiver - Trainz .tzarc archive extractor"),
+                  *_excludes()])
+    _pyinstaller(f"{APP_NAME}Cli", CLI_ENTRY,
+                 ["--onefile", "--console",
+                  *version_file(f"{APP_NAME}Cli", "TZarchiver command line"),
+                  *_excludes(cli=True)])
+    exes = [DIST / f"{APP_NAME}.exe", DIST / f"{APP_NAME}Cli.exe"]
+    for exe in exes:
+        if not exe.is_file():
+            raise SystemExit(f"PyInstaller did not produce {exe}")
+    # release ships one zip (like dmg/deb/zst do); the loose exes stay in
+    # dist for local testing, the workflow uploads only the zip for Windows
+    zip_path = DIST / f"{APP_NAME}-{VERSION}-windows.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for exe in exes:
+            zf.write(exe, exe.name)
+    return [*exes, zip_path]
+
+
+# --------------------------------------------------------------------------
+# macOS: .app bundle -> .dmg
+# --------------------------------------------------------------------------
+
+def build_dmg() -> Path:
+    _pyinstaller(APP_NAME, GUI_ENTRY,
+                 ["--windowed", *hidden_imports(), *bundled_assets()])
+    app = DIST / f"{APP_NAME}.app"
+    if not app.is_file() and not app.is_dir():
+        raise SystemExit(f"PyInstaller did not produce {app}")
+
+    dmg = DIST / f"{APP_NAME}-{VERSION}-macos.dmg"
+    staging = Path(tempfile.mkdtemp())
+    try:
+        shutil.copytree(app, staging / (APP_NAME + ".app"))
+        if ICON_PNG.is_file():
+            # a simple background image for the dmg window
+            shutil.copy(ICON_PNG, staging / "background.png")
+        hdiutil = ["hdiutil", "create", "-volname", APP_NAME,
+                   "-srcfolder", str(staging), "-ov", "-format", "UDZO", str(dmg)]
+        run(hdiutil)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    if not dmg.is_file():
+        raise SystemExit("hdiutil did not produce the dmg")
+    return dmg
+
+
+# --------------------------------------------------------------------------
+# Linux: .deb and .pkg.tar.zst via fpm (fallbacks below)
+# --------------------------------------------------------------------------
+
+# Distro- and Python-version-neutral home for the pure-Python app inside the
+# Linux packages. Distro site dirs are all different (Debian/Ubuntu:
+# /usr/lib/python3/dist-packages, Arch & co: /usr/lib/python3.X/site-packages,
+# and X changes every Python release), so we install here and put the dir on
+# sys.path via PYTHONPATH from the launcher script instead.
+APP_PYDIR = "share/tzarchiver/python"
+
+
+def _install_tree(prefix: Path) -> None:
+    """Install the app into a prefix for packaging.
+
+    Builds a wheel with pip, then extracts the package files into
+    /usr/share/<APP lower>/python under the prefix (see APP_PYDIR).
+    """
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        run([sys.executable, "-m", "pip", "wheel", "--no-deps",
+             "--wheel-dir", str(tmp), str(ROOT)])
+        wheels = list(tmp.glob("*.whl"))
+        if not wheels:
+            raise RuntimeError("pip wheel produced no wheel file")
+
+        # prefix already ends with /usr
+        target = prefix / APP_PYDIR
+        target.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(wheels[0]) as zf:
+            for name in zf.namelist():
+                parts = PurePosixPath(name).parts
+                # no path traversal; skip directories and root-level files
+                if not parts or ".." in parts or len(parts) < 2 or name.endswith("/"):
+                    continue
+                # skip dist-info / data metadata, keep only the package itself
+                if parts[0].endswith((".dist-info", ".data")):
+                    continue
+                dest = target.joinpath(*parts)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(name) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def build_deb() -> Path:
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), "amd64")
+    pkg_dir = DIST / f"{APP_NAME}-{VERSION}-linux-{arch}"
+
+    if not have("fpm"):
+        raise RuntimeError(
+            "fpm not found - install it (gem install fpm or apt install fpm) "
+            "to build the .deb"
+        )
+
+    _stage_unix_root(pkg_dir)
+    # fpm refuses to overwrite an existing package file, so remove any stale
+    # artifact first; give it the full output path via -p so nothing lands in
+    # the source tree.
+    deb = DIST / f"tzarchiver_{VERSION}_{arch}.deb"
+    deb.unlink(missing_ok=True)
+    run(["fpm", "-s", "dir", "-t", "deb",
+         "-n", "tzarchiver", "--version", VERSION,
+         "--architecture", arch,
+         "--description", "Trainz .tzarc archive extractor/creator (GUI + CLI)",
+         "--depends", "python3",
+         # the no-arg GUI mode needs the Qt binding; unlike PySide6, PyQt6
+         # is packaged by every current distro, so the deb can depend on it
+         # directly (Ubuntu 24.04+, Debian, ...; 22.04 ships no Qt6 python
+         # bindings at all and its standard support ended in June 2026).
+         "--depends", "python3-pyqt6",
+         "--maintainer", "SilverGreen93 <noreply@github.com>",
+         "--license", "MIT",
+         "-p", str(deb),
+         # remap the staging root's ./usr to /usr inside the package; fpm is
+         # finicky about "./usr" with a leading dot, plain "usr" works
+         "-C", str(pkg_dir),
+         "usr=/"])
+
+    if not deb.is_file():
+        raise RuntimeError("fpm did not produce a .deb file")
+    return deb
+
+
+def build_zst() -> Path:
+    arch = platform.machine()  # x86_64 / aarch64
+    pkg_dir = DIST / f"{APP_NAME}-{VERSION}-linux-{arch}"
+
+    if not have("fpm"):
+        raise RuntimeError(
+            "fpm not found - install it (gem install fpm) to build the "
+            ".pkg.tar.zst"
+        )
+    if not have("zstd"):
+        raise RuntimeError(
+            "zstd not found - fpm's pacman backend needs it for --zstd "
+            "(apt install zstd / pacman -S zstd) to build the .pkg.tar.zst"
+        )
+
+    _stage_unix_root(pkg_dir)
+    # full output path via -p, see build_deb; bsdtar is required by fpm's
+    # pacman backend to generate the MTREE
+    out = DIST / f"tzarchiver-{VERSION}-{arch}.pkg.tar.zst"
+    out.unlink(missing_ok=True)
+    run(["fpm", "-s", "dir", "-t", "pacman",
+         "-n", "tzarchiver", "--version", VERSION,
+         "--architecture", arch,
+         "--description", "Trainz .tzarc archive extractor/creator (GUI + CLI)",
+         "--depends", "python3",  # Arch's 'python' package Provides: python3
+         "--depends", "python-pyqt6",  # Arch [extra] package for the binding
+         "--maintainer", "SilverGreen93 <noreply@github.com>",
+         "--license", "MIT",
+         "-p", str(out),
+         # remap the staging root's ./usr to /usr inside the package; fpm is
+         # finicky about "./usr" with a leading dot, plain "usr" works
+         "-C", str(pkg_dir),
+         "usr=/"])
+
+    if not out.is_file():
+        raise RuntimeError("fpm did not produce a .pkg.tar.zst file")
+    return out
+
+
+def _stage_unix_root(pkg_dir: Path) -> None:
+    """Build a ./usr prefix tree with the app installed under it.
+
+    The app itself is pure Python; PyQt6/Qt is expected from the system
+    python (a dependency of the package), which keeps the packages small and
+    avoids bundling Qt twice.
+    """
+    if pkg_dir.exists():
+        shutil.rmtree(pkg_dir)
+    prefix = pkg_dir
+
+    _install_tree(prefix / "usr")
+
+    # pip --prefix also drops bin/Scripts script stubs; remove them (they are
+    # tied to the build interpreter), we ship our own wrapper below
+    for junk in ("bin", "Scripts"):
+        shutil.rmtree(prefix / "usr" / junk, ignore_errors=True)
+        shutil.rmtree(prefix / junk, ignore_errors=True)
+
+    # wrap the console script so PATH works without activating anything;
+    # the PYTHONPATH line is what makes the app importable on every distro
+    # (the package is installed under /usr/share, not a distro site dir)
+    bindir = prefix / "usr" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    wrapper = bindir / "tzarchiver"
+    app_py = "/usr/" + APP_PYDIR
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'PYTHONPATH="{app_py}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
+        "export PYTHONPATH\n"
+        'exec python3 -m tzarchiver.cli "$@"\n',
+        newline="\n",
+    )
+    wrapper.chmod(0o755)
+
+    # desktop entry for the GUI
+    share = prefix / "usr" / "share"
+    apps = share / "applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    (apps / "tzarchiver.desktop").write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=TZarchiver\n"
+        "Comment=Trainz .tzarc archive extractor/creator\n"
+        "Exec=tzarchiver\n"
+        "Icon=tzarchiver\n"
+        "Categories=Utility;\n",
+        newline="\n",
+    )
+    icons = share / "icons" / "hicolor" / "256x256" / "apps"
+    icons.mkdir(parents=True, exist_ok=True)
+    if ICON_PNG.is_file():
+        shutil.copy(ICON_PNG, icons / "tzarchiver.png")
+
+
+# --------------------------------------------------------------------------
+
+BUILDERS = {
+    "exe": ("Windows one-file exes (GUI + CLI)", lambda: sys.platform == "win32"),
+    "dmg": ("macOS dmg", lambda: sys.platform == "darwin"),
+    "deb": ("Linux .deb (needs fpm)", lambda: sys.platform.startswith("linux")),
+    "zst": ("Linux .pkg.tar.zst (needs fpm)", lambda: sys.platform.startswith("linux")),
+}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--only", choices=sorted(BUILDERS), help="build a single artifact")
+    args = parser.parse_args()
+
+    DIST.mkdir(exist_ok=True)
+    targets = [args.only] if args.only else list(BUILDERS)
+    built: list[Path] = []
+
+    for target in targets:
+        desc, supported = BUILDERS[target]
+        if not supported():
+            print(f"[skip] {desc}: not supported on this host ({platform.system()})")
+            continue
+        print(f"[build] {desc}")
+        builder = {"exe": build_exe, "dmg": build_dmg,
+                   "deb": build_deb, "zst": build_zst}[target]
+        try:
+            result = builder()
+            built.extend(result if isinstance(result, list) else [result])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[error] {desc}: {exc}", file=sys.stderr)
+
+    if not built:
+        return 1
+
+    print("\nArtifacts:")
+    for artifact in built:
+        print(" ", artifact)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

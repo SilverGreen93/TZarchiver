@@ -44,14 +44,24 @@ tests/                    pytest suite, fixtures in tests/test_files
 Run the tests with `python -m pytest` (no installation needed, `tests/conftest.py`
 puts `src` on the path).
 
-## Building the Windows executables
+## Packaging
 
-The application can be packaged with PyInstaller using the two entry scripts:
+`build.py` builds distributable packages for the host OS:
+
+| Platform | Artifact | Requirement |
+|----------|----------|-------------|
+| Windows  | `dist/TZarchiver.exe` (GUI) and `dist/TZarchiverCli.exe` (CLI), both one-file | `pip install ".[gui,build]"` |
+| macOS    | `dist/TZarchiver-<ver>-macos.dmg` | `pip install ".[gui,build]"` |
+| Linux    | `dist/tzarchiver_<ver>_amd64.deb` and `.pkg.tar.zst` | `gem install fpm` |
 
 ```
-pyinstaller --windowed --icon assets/175.ico tzarchiver_gui_entry.py   # TZarchiver.exe
-pyinstaller --console tzarchiver_cli_entry.py                          # TZarchiverCli.exe
+python build.py                 # build everything this host supports
+python build.py --only exe      # build a single artifact
 ```
+
+PyInstaller cannot cross-compile, so each artifact must be built on its target
+OS; remember to bump `VERSION` in `build.py` together with the version in
+`pyproject.toml`.
 
 ## File Format Specifications
 
