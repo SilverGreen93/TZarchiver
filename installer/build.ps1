@@ -1,0 +1,72 @@
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+  Builds the TZarchiver MSI installer.
+
+.DESCRIPTION
+  Packages the PyInstaller one-file exes (dist\TZarchiver.exe and
+  dist\TZarchiverCli.exe) into a per-user MSI with WiX v5. Build the exes
+  first (python build.py --only exe). Requires the WiX command-line tool:
+
+    dotnet tool install --global wix
+    wix extension add -g WixToolset.UI.wixext
+
+.PARAMETER Version
+  Override the version baked into the MSI. Default: the version from
+  pyproject.toml.
+#>
+param(
+    [string]$Version
+)
+$ErrorActionPreference = 'Stop'
+
+$root = Split-Path -Parent $PSScriptRoot
+$distDir = Join-Path $root 'dist'
+
+if (-not $Version) {
+    $match = Select-String -Path (Join-Path $root 'pyproject.toml') -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+    if (-not $match) { throw 'Could not read the version from pyproject.toml.' }
+    $Version = $match.Matches[0].Groups[1].Value
+}
+
+# MSI ProductVersion wants up to three numeric segments; unlike Kuid2Hash this
+# project's version (1.3.0) fits as-is, so keep all three and only pad/drop.
+$parts = @(($Version.TrimStart('v') -split '\.') | Where-Object { $_ -match '^\d+$' })
+if ($parts.Count -eq 0) { throw "Version '$Version' contains no numeric segments." }
+while ($parts.Count -lt 3) { $parts += '0' }
+$mSIVersion = ($parts[0..2] -join '.')
+
+foreach ($exe in 'TZarchiver.exe', 'TZarchiverCli.exe') {
+    $path = Join-Path $distDir $exe
+    if (-not (Test-Path $path)) {
+        throw "$exe not found in $distDir. Build it first: python build.py --only exe"
+    }
+    # Don't ship an MSI whose version disagrees with the binaries inside it.
+    # Compare the numeric prefix only: PyInstaller writes "2.0" while the MSI
+    # version is padded to "2.0.0".
+    $fileVersion = (Get-Item $path).VersionInfo.FileVersion
+    $fileParts = @(($fileVersion -split '\.') | Where-Object { $_ -match '^\d+$' })
+    $msiParts = @($mSIVersion -split '\.')
+    if (-not $fileParts -or ($fileParts[0..([Math]::Min($fileParts.Count, $msiParts.Count) - 1)] -join '.') -ne ($msiParts[0..([Math]::Min($fileParts.Count, $msiParts.Count) - 1)] -join '.')) {
+        throw "$exe is version $fileVersion, but the MSI version is $mSIVersion. Rebuild: python build.py --only exe"
+    }
+}
+
+Write-Host "Building TZarchiver-$mSIVersion.msi (MSI version $mSIVersion)"
+Push-Location $root
+try {
+    wix build installer\Product.wxs `
+        -arch x64 `
+        -ext WixToolset.UI.wixext `
+        -d "Version=$mSIVersion" `
+        -d "DistDir=$distDir" `
+        -d "AssetsDir=$(Join-Path $root 'assets')" `
+        -o (Join-Path $distDir "TZarchiver-$mSIVersion.msi")
+    if ($LASTEXITCODE -ne 0) { throw "wix build failed ($LASTEXITCODE)" }
+}
+finally {
+    Pop-Location
+}
+
+$msi = Join-Path $distDir "TZarchiver-$mSIVersion.msi"
+Write-Host "`nDone: $msi  ($([math]::Round((Get-Item $msi).Length / 1KB, 1)) KB)"

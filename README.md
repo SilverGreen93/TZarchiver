@@ -52,13 +52,20 @@ puts `src` on the path).
 | Platform | Artifact | Requirement |
 |----------|----------|-------------|
 | Windows  | `dist/TZarchiver.exe` (GUI) and `dist/TZarchiverCli.exe` (CLI), both one-file | `pip install ".[gui,build]"` |
+| Windows  | `dist/TZarchiver-<ver>.msi` — per-user installer (no elevation) | `pwsh installer/build.ps1` (needs [WiX v5](https://wixtoolset.org/)) |
 | macOS    | `dist/TZarchiver-<ver>-macos.dmg` | `pip install ".[gui,build]"` |
 | Linux    | `dist/tzarchiver_<ver>_amd64.deb` and `.pkg.tar.zst` | `gem install fpm` |
 
 ```
 python build.py                 # build everything this host supports
 python build.py --only exe      # build a single artifact
+pwsh installer/build.ps1        # MSI, after the exes exist
 ```
+
+The MSI installs both exes into `%LOCALAPPDATA%\Programs\TZarchiver`, adds
+Start Menu shortcuts, puts `tzarchivercli` on the user PATH, and registers a
+normal Add/Remove Programs entry — all per-user, so it never asks for
+administrator rights.
 
 PyInstaller cannot cross-compile, so each artifact must be built on its target
 OS; remember to bump `VERSION` in `build.py` together with the version in
