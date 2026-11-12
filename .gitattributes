@@ -61,3 +61,12 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+###############################################################################
+# Test fixtures must stay byte exact. The .tzarc archives hold the original
+# CRLF bytes, and the extracted reference folders beside them are compared
+# against the archives byte for byte, so git must not normalize line endings
+# in either direction.
+###############################################################################
+tests/test_files/** -text
+*.tzarc -text
