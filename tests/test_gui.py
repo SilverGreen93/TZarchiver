@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PyQt6.QtWidgets")
 
 from PyQt6.QtCore import QSize  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 from tzarchiver.gui import (  # noqa: E402
     APP_TITLE,
@@ -302,3 +302,20 @@ def test_dropping_a_folder_switches_to_the_create_tab(window):
     window.dropEvent(event)
     assert window.tabs.currentIndex() == CREATE_TAB
     assert window.tv_create.topLevelItemCount() == 1
+
+
+# ---------------------------------------------------------------------------
+# footer
+# ---------------------------------------------------------------------------
+
+def test_footer_link_shares_the_copyright_row(window, qapp):
+    window.show()
+    qapp.processEvents()
+    found = [w for w in window.findChildren(QLabel) if "GitHub" in w.text()]
+    assert found, "no GitHub link label in the footer"
+    link = found[0]
+    assert "GitHub" in link.text()
+    assert 'href="https://github.com/SilverGreen93/TZarchiver"' in link.text()
+    credit = next(w for w in window.findChildren(QLabel) if "©" in w.text())
+    # same footer row: credit at the left, link at the right, same y
+    assert credit.y() == link.y() and credit.x() < link.x()
