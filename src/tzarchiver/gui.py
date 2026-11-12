@@ -143,11 +143,13 @@ class TzarcWindow(QWidget):
         outer.addLayout(columns, 1)
 
         footer = QHBoxLayout()
-        footer.addWidget(QLabel(f"by SilverGreen93 (c) 2024"), 0, Qt.AlignmentFlag.AlignHCenter)
-        link = QLabel(f'<a href="{GITHUB_URL}">{GITHUB_URL}</a>')
+        footer.addWidget(QLabel("\u00a9 2026 SilverGreen93"))
+        footer.addStretch(1)
+        link = QLabel(f'<a href="{GITHUB_URL}">GitHub</a>')
+        link.setAlignment(Qt.AlignmentFlag.AlignRight)
         link.setOpenExternalLinks(False)
         link.linkActivated.connect(lambda: webbrowser.open(GITHUB_URL))
-        footer.addWidget(link, 0, Qt.AlignmentFlag.AlignHCenter)
+        footer.addWidget(link)
         outer.addLayout(footer)
 
         self.btn_extract.clicked.connect(self.on_extract)
