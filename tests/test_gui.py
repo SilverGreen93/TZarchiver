@@ -126,7 +126,7 @@ def test_empty_trees_carry_the_drag_hint(window):
 def test_the_hint_disappears_when_the_first_path_arrives(window):
     window.load_paths([str(FOLDER_ARCHIVE)])
     item = window.tv_extract.topLevelItem(0)
-    assert item.text(0) == FOLDER_ARCHIVE.name
+    assert item.text(0).startswith(FOLDER_ARCHIVE.name)
     assert not item.isDisabled()
 
 
@@ -140,7 +140,7 @@ def test_dropped_files_land_on_the_extract_tab(window):
     assert window.create_dirs == []
     assert window.tabs.currentIndex() == EXTRACT_TAB
     assert window.tv_extract.topLevelItemCount() == 2
-    assert window.tv_extract.topLevelItem(0).text(0) == FOLDER_ARCHIVE.name
+    assert window.tv_extract.topLevelItem(0).text(0) == f"{FOLDER_ARCHIVE.name} (v1)"
 
 
 def test_dropped_folders_land_on_the_create_tab(window):
@@ -180,10 +180,17 @@ def test_mixed_drops_fill_both_trees_and_pick_the_busier_tab(window):
     assert window.tabs.currentIndex() == CREATE_TAB
 
 
+def test_queued_archives_show_their_version(window):
+    window.load_paths([str(FOLDER_ARCHIVE), str(V2_ARCHIVE)])
+    assert window.tv_extract.topLevelItem(0).text(0) == f"{FOLDER_ARCHIVE.name} (v1)"
+    assert window.tv_extract.topLevelItem(1).text(0) == f"{V2_ARCHIVE.name} (v2)"
+
+
 def test_bad_archives_are_reported_but_stay_listed(window, dialogs):
     junk = Path(__file__).parent / "conftest.py"
     window.load_paths([str(junk)])
     assert window.tv_extract.topLevelItemCount() == 1
+    assert window.tv_extract.topLevelItem(0).text(0) == junk.name  # no version, it never parsed
     assert window.tv_extract.topLevelItem(0).childCount() == 0
     assert [kind for kind, _ in dialogs] == ["error"]
 

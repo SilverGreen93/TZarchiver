@@ -216,6 +216,7 @@ class TzarcWindow(QWidget):
         except (TzarcError, OSError) as exc:
             self._error(exc, path)
         else:
+            root.setText(0, f"{Path(path).name} (v{archive.version})")  # show the tzarc version
             for entry in archive.entries:
                 root.addChild(QTreeWidgetItem([entry.name]))
         root.setExpanded(True)
