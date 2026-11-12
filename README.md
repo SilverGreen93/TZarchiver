@@ -16,8 +16,10 @@ tzarchiver-gui                 # open the GUI
 tzarchiver "Some Asset.tzarc"  # list an archive
 ```
 
-Or run straight from the source tree with `PYTHONPATH=src` set, using
-`tzarchiver_cli_entry.py` / `tzarchiver_gui_entry.py`.
+Or run straight from the source tree — `tzarchiver_cli_entry.py` /
+`tzarchiver_gui_entry.py` add `src/` to the path themselves, so no install
+and no `PYTHONPATH` are needed (the GUI still needs PyQt6 in the interpreter
+you use, e.g. `python -m venv .venv` + `pip install -e ".[gui]"`).
 
 ## Command line
 

@@ -6,8 +6,14 @@ default.  With no arguments it prints usage and exits; use TZarchiver.exe
 """
 
 import sys
+from pathlib import Path
 
 if __name__ == "__main__":
+    # when run from the source tree without installing, make src/ importable
+    _src = Path(__file__).resolve().parent / "src"
+    if _src.is_dir() and str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
+
     from tzarchiver.cli import main
 
     if not sys.argv[1:]:
