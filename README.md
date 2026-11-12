@@ -44,9 +44,7 @@ puts `src` on the path).
 
 ## Building the Windows executables
 
-The original project was built with Microsoft Visual Studio 2022 and .NET
-Framework 4.8 (the sources remain under `TZarchiver/`). The Python build can be
-packaged with PyInstaller using the two entry scripts:
+The application can be packaged with PyInstaller using the two entry scripts:
 
 ```
 pyinstaller --windowed --icon assets/175.ico tzarchiver_gui_entry.py   # TZarchiver.exe
