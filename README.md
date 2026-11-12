@@ -63,9 +63,9 @@ is described here: [TZarc File Format Specification](tzarc-format.md)
 For any bugs, issues or feature requests, use the Issues tab in GitHub.
 
 **Note** that Trainz 2022 changed the TZarc format to v2, with zlib
-compression. Both reading and writing v2 archives are supported here (writing
-v2 from the command line with `--v2`; the GUI creates v1 archives, like the
-original application).
+compression. Both reading and writing v2 archives are supported here: from the
+command line with `--v2`, or in the GUI with the "Create compressed v2
+archives" checkbox.
 
 ## License
 

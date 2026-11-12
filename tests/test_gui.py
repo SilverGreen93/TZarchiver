@@ -19,7 +19,7 @@ pytest.importorskip("PyQt6.QtWidgets")
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 from tzarchiver.gui import APP_TITLE, HINT, TzarcWindow  # noqa: E402
-from tzarchiver.tzarc import V1, read_archive  # noqa: E402
+from tzarchiver.tzarc import V1, V2, read_archive  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "test_files"
 FOLDER = FIXTURES / "folder"
@@ -167,6 +167,17 @@ def test_create_button_archives_every_queued_folder(window, dialogs, tmp_path):
     assert archive.version == V1
     assert archive.names() == ["config.chump", "folder/fisier.txt"]
     assert ("info", "Finished creating archives") in dialogs
+
+
+def test_v2_checkbox_makes_compressed_archives(window, dialogs, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.chk_v2.setChecked(True)
+    window.load_paths([str(source)])
+    window.on_create()
+    archive = read_archive(source.with_suffix(".tzarc"))
+    assert archive.version == V2
+    assert archive.read("config.chump") == (FOLDER / "config.chump").read_bytes()
 
 
 def test_create_skips_queued_files(window, dialogs, tmp_path):

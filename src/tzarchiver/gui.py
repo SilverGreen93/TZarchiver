@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -30,6 +31,8 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .tzarc import (
+    V1,
+    V2,
     TzarcError,
     create_archive,
     default_extract_dir,
@@ -105,6 +108,9 @@ class TzarcWindow(QWidget):
         buttons.addWidget(self.btn_extract)
         buttons.addWidget(self.btn_create)
         left.addLayout(buttons)
+
+        self.chk_v2 = QCheckBox("Create compressed v2 archives")
+        left.addWidget(self.chk_v2)
         columns.addLayout(left)
 
         # middle column: queue maintenance and the drag hint
@@ -221,13 +227,17 @@ class TzarcWindow(QWidget):
         self._info("Finished extracting files")
 
     def on_create(self) -> None:
-        """Archive every queued folder, as the Create TZarc button did."""
+        """Archive every queued folder, as the Create TZarc button did.
+
+        The compressed v2 checkbox switches the output to version 2.
+        """
+        version = V2 if self.chk_v2.isChecked() else V1
         for path in self.queue:
             if Path(path).is_file():
                 continue
             try:
-                archive = create_archive(path)
-                archive.write(str(path) + ".tzarc")
+                archive = create_archive(path, version=version)
+                archive.write(str(path) + ".tzarc", version=version)
             except (TzarcError, OSError) as exc:
                 self._error(exc, path)
                 continue
