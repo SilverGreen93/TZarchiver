@@ -7,7 +7,8 @@ Utility application to read and write Trainz `.tzarc` files.
 **Note** that Trainz 2022 changed the TZarc format to v2, with zlib
 compression. Both reading and writing v2 archives are supported here: from the
 command line with `--v2`, or in the GUI with the "Create compressed v2
-archives" checkbox.
+archives" checkbox. The GUI settings are stored in `%APPDATA%\SilverGreen93\TZarchiver.ini` (on Linux,
+`~/.config/SilverGreen93/TZarchiver.conf`).
 
 ## Getting Started
 

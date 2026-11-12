@@ -16,13 +16,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets")
 
-from PyQt6.QtCore import QSize  # noqa: E402
+from PyQt6.QtCore import QSettings, QSize  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
+from tzarchiver import gui  # noqa: E402
 from tzarchiver.gui import (  # noqa: E402
     APP_TITLE,
     CREATE_TAB,
     EXTRACT_TAB,
+    KEY_V2,
     PLACEHOLDER_CREATE,
     PLACEHOLDER_EXTRACT,
     TzarcWindow,
@@ -57,9 +59,22 @@ def dialogs(monkeypatch):
 
 
 @pytest.fixture
-def window(qapp):
+def window(qapp, scratch_settings):
     win = TzarcWindow()
     yield win
+
+
+@pytest.fixture(autouse=True)
+def scratch_settings(tmp_path, monkeypatch):
+    """Point the remembered-state file at a scratch file for the whole test.
+
+    Without this the suite would read whatever the developer last ticked and
+    write its own choices into the real per-user settings file.  The fixture
+    hands back a reader for the same file so a test can play the previous run.
+    """
+    path = str(tmp_path / "tzarchiver.ini")
+    monkeypatch.setattr(gui, "_settings", lambda: QSettings(path, QSettings.Format.IniFormat))
+    return lambda: QSettings(path, QSettings.Format.IniFormat)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +312,44 @@ def test_each_button_only_touches_its_own_tab(window, dialogs, tmp_path):
     window.load_paths([str(source)])
     window.on_extract()  # the extract queue is empty
     assert not (tmp_path / (source.name + ".tzarc")).exists()
+
+
+# ---------------------------------------------------------------------------
+# remembered state
+# ---------------------------------------------------------------------------
+
+def test_the_v2_checkbox_starts_off_when_nothing_was_stored(window):
+    assert not window.chk_v2.isChecked()
+
+
+def test_a_v2_choice_left_by_an_earlier_run_is_restored(qapp, scratch_settings):
+    settings = scratch_settings()
+    settings.setValue(KEY_V2, True)
+    settings.sync()
+    assert TzarcWindow().chk_v2.isChecked()
+
+
+def test_a_v2_choice_is_carried_to_the_next_window(window, qapp):
+    window.chk_v2.setChecked(True)
+    assert TzarcWindow().chk_v2.isChecked()
+    window.chk_v2.setChecked(False)  # unticking is remembered too
+    assert not TzarcWindow().chk_v2.isChecked()
+
+
+def test_the_remembered_choice_creates_v2_archives(window, dialogs, tmp_path, qapp):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.chk_v2.setChecked(True)
+    again = TzarcWindow()  # as if the app had been closed and opened again
+    assert again.chk_v2.isChecked()
+    again.load_paths([str(source)])
+    again.on_create()
+    assert read_archive(source.with_suffix(".tzarc")).version == V2
+
+
+def test_the_choice_is_written_as_soon_as_it_is_ticked(window, qapp, scratch_settings):
+    window.chk_v2.setChecked(True)
+    assert scratch_settings().value(KEY_V2, False, bool)
 
 
 # ---------------------------------------------------------------------------

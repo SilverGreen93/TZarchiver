@@ -4,7 +4,8 @@ A resizable portrait window with a tabbed queue: the Extract tab lists the
 tzarc files dropped on the window (each expanded with its contents), the
 Create tab lists the folders to archive (expanded with their files).  The
 Extract all / Create all button for the current tab and Clear list sit below
-the tabs.  The compressed v2 checkbox belongs to the Create tab only.
+the tabs.  The compressed v2 checkbox belongs to the Create tab only and keeps
+its state from one run to the next.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -52,6 +53,11 @@ PLACEHOLDER_CREATE = "Drag & drop folders here"
 
 EXTRACT_TAB, CREATE_TAB = 0, 1
 
+# what the GUI carries over from one run to the next, and where it keeps it
+SETTINGS_ORG = "SilverGreen93"
+SETTINGS_APP = "TZarchiver"
+KEY_V2 = "create/compressed_v2"
+
 
 def _resource_path(name: str) -> str | None:
     """Absolute path to a bundled resource (works from source and PyInstaller)."""
@@ -80,6 +86,19 @@ def _lookup_key(path: str) -> str:
     Explorer and typed by hand counts once.
     """
     return os.path.normcase(os.path.normpath(path))
+
+
+def _settings() -> QSettings:
+    """The per-user file the GUI keeps its remembered state in.
+
+    IniFormat on purpose: a plain ini file in the usual per-user settings
+    location (%APPDATA%\\SilverGreen93\\TZarchiver.ini on Windows,
+    ~/.config/SilverGreen93/TZarchiver.conf on Linux) instead of registry keys,
+    so it can be read or deleted by hand and travels with the user profile.
+    """
+    return QSettings(
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, SETTINGS_ORG, SETTINGS_APP
+    )
 
 
 class TzarcWindow(QWidget):
@@ -112,6 +131,8 @@ class TzarcWindow(QWidget):
 
         self.tv_create = self._make_tree(PLACEHOLDER_CREATE)
         self.chk_v2 = QCheckBox("Create compressed v2 archives (TRS22+)")
+        self.chk_v2.setChecked(self._remembered_v2())
+        self.chk_v2.toggled.connect(self._remember_v2)
         create_tab = QWidget()
         create_layout = QVBoxLayout(create_tab)
         create_layout.setContentsMargins(0, 0, 0, 0)
@@ -277,6 +298,23 @@ class TzarcWindow(QWidget):
             self._seen_files.clear()
             self._reset_placeholder(self.tv_extract, PLACEHOLDER_EXTRACT)
         self._update_buttons()
+
+    # -- remembered state -----------------------------------------------------
+    @staticmethod
+    def _remembered_v2() -> bool:
+        """The compressed-v2 choice left by the previous run, off on first use."""
+        return _settings().value(KEY_V2, False, bool)
+
+    @staticmethod
+    def _remember_v2(checked: bool) -> None:
+        """Store the compressed-v2 choice the moment it changes.
+
+        Saving on every toggle instead of only at close keeps the last choice
+        even if the window is killed rather than closed.
+        """
+        settings = _settings()
+        settings.setValue(KEY_V2, checked)
+        settings.sync()
 
     # -- drag and drop --------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt naming
