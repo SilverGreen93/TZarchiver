@@ -2,9 +2,10 @@
 
 Utility application to read and write Trainz `.tzarc` files.
 
-This is the Python port of the original VB.NET application: the archive format
-code lives in a plain, Qt-free module (`tzarchiver.tzarc`) and the GUI has been
-rebuilt with PyQt6, reproducing the original window.
+**Note** that Trainz 2022 changed the TZarc format to v2, with zlib
+compression. Both reading and writing v2 archives are supported here: from the
+command line with `--v2`, or in the GUI with the "Create compressed v2
+archives" checkbox.
 
 ## Getting Started
 
@@ -71,11 +72,6 @@ is described here: [TZarc File Format Specification](tzarc-format.md)
 ## Issues and Feature requests
 
 For any bugs, issues or feature requests, use the Issues tab in GitHub.
-
-**Note** that Trainz 2022 changed the TZarc format to v2, with zlib
-compression. Both reading and writing v2 archives are supported here: from the
-command line with `--v2`, or in the GUI with the "Create compressed v2
-archives" checkbox.
 
 ## License
 
