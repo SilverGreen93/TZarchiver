@@ -98,7 +98,7 @@ class TzarcWindow(QWidget):
         self.tabs.addTab(self.tv_extract, "Extract")
 
         self.tv_create = self._make_tree(PLACEHOLDER_CREATE)
-        self.chk_v2 = QCheckBox("Create compressed v2 archives")
+        self.chk_v2 = QCheckBox("Create compressed v2 archives (TRS22+)")
         create_tab = QWidget()
         create_layout = QVBoxLayout(create_tab)
         create_layout.setContentsMargins(0, 0, 0, 0)
@@ -114,9 +114,10 @@ class TzarcWindow(QWidget):
         self.btn_extract = QPushButton("Extract all")
         self.btn_create = QPushButton("Create all")
         self.btn_clear = QPushButton("Clear list")
-        for button in (self.btn_extract, self.btn_create):
-            button.setMinimumSize(105, 46)
-        self.btn_clear.setMinimumSize(72, 47)
+        buttons = (self.btn_extract, self.btn_create, self.btn_clear)
+        width = max(button.sizeHint().width() for button in buttons)
+        for button in buttons:
+            button.setMinimumSize(width, 23)
         actions.addWidget(self.btn_extract)
         actions.addWidget(self.btn_create)
         actions.addStretch(1)
@@ -138,8 +139,9 @@ class TzarcWindow(QWidget):
         self.btn_clear.clicked.connect(self.on_clear)
 
         self._on_tab_changed(self.tabs.currentIndex())
+        self._update_buttons()
         self.setMinimumSize(380, 480)
-        self.resize(430, 640)  # portrait on startup
+        self.resize(self.minimumSize())  # portrait, at the minimum, on startup
 
     @staticmethod
     def _make_tree(placeholder: str) -> QTreeWidget:
@@ -167,6 +169,11 @@ class TzarcWindow(QWidget):
         self.btn_extract.setVisible(index == EXTRACT_TAB)
         self.btn_create.setVisible(index == CREATE_TAB)
 
+    def _update_buttons(self) -> None:
+        """Keep the action buttons in step with the two queues."""
+        self.btn_extract.setEnabled(bool(self.extract_files))
+        self.btn_create.setEnabled(bool(self.create_dirs))
+
     # -- queue ------------------------------------------------------------------
     def load_paths(self, paths: list[str]) -> None:
         """Sort dropped paths into their tab and switch to the busiest one."""
@@ -184,6 +191,7 @@ class TzarcWindow(QWidget):
     def _add_extract_file(self, path: str) -> None:
         self._drop_placeholder(self.tv_extract)
         self.extract_files.append(path)
+        self._update_buttons()
         root = QTreeWidgetItem([Path(path).name])
         self.tv_extract.addTopLevelItem(root)
         try:
@@ -198,6 +206,7 @@ class TzarcWindow(QWidget):
     def _add_create_folder(self, path: str) -> None:
         self._drop_placeholder(self.tv_create)
         self.create_dirs.append(path)
+        self._update_buttons()
         root = QTreeWidgetItem([Path(path).name])
         self.tv_create.addTopLevelItem(root)
         base = Path(path)
@@ -243,6 +252,7 @@ class TzarcWindow(QWidget):
         else:
             self.extract_files.clear()
             self._reset_placeholder(self.tv_extract, PLACEHOLDER_EXTRACT)
+        self._update_buttons()
 
     # -- drag and drop --------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt naming

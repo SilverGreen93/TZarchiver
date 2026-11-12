@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets")
 
+from PyQt6.QtCore import QSize  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from tzarchiver.gui import (  # noqa: E402
@@ -69,9 +70,9 @@ def test_window_title_carries_the_version(window):
     assert window.windowTitle() == APP_TITLE
 
 
-def test_window_is_resizable_and_starts_portrait(window):
+def test_window_is_resizable_and_starts_portrait_at_the_minimum(window):
+    assert window.size() == window.minimumSize() == QSize(380, 480)
     assert window.minimumSize() != window.maximumSize()
-    assert window.height() > window.width()
 
 
 def test_two_tabs_host_the_two_queues(window):
@@ -91,6 +92,23 @@ def test_the_current_tabs_button_is_the_one_shown(window):
     window.tabs.setCurrentIndex(CREATE_TAB)
     assert window.btn_create.isVisibleTo(window)
     assert not window.btn_extract.isVisibleTo(window)
+
+
+def test_action_buttons_share_one_width_and_a_short_height(window):
+    sizes = {b.minimumSize() for b in (window.btn_extract, window.btn_create, window.btn_clear)}
+    assert len(sizes) == 1
+    assert next(iter(sizes)).height() == 23
+
+
+def test_action_buttons_follow_their_queue(window):
+    assert not window.btn_extract.isEnabled()
+    assert not window.btn_create.isEnabled()
+    window.load_paths([str(FOLDER_ARCHIVE)])
+    assert window.btn_extract.isEnabled()
+    assert not window.btn_create.isEnabled()
+    window.tabs.setCurrentIndex(EXTRACT_TAB)
+    window.on_clear()
+    assert not window.btn_extract.isEnabled()
 
 
 # ---------------------------------------------------------------------------
