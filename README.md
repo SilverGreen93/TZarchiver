@@ -89,3 +89,9 @@ This project is licensed under the MIT License - see [LICENSE.md](LICENSE.md) fi
 ## Acknowledgments
 
 This project was possible by doing reverse engineering on the TZarc file format and no official information was given in regards to this file format from Auran/N3V.
+
+## Related Trainz tools
+
+- [CDP Explorer](https://github.com/SilverGreen93/CDPExplorer)
+- [Kuid Lister](https://github.com/SilverGreen93/KuidLister)
+- [Kuid2Hash](https://github.com/SilverGreen93/Kuid2Hash)
