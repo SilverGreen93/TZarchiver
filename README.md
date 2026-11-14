@@ -1,5 +1,7 @@
 # TZarchiver
 
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/SilverGreen93/TZarchiver)](https://github.com/SilverGreen93/TZarchiver/releases/latest) [![Downloads (Latest Release)](https://img.shields.io/github/downloads/SilverGreen93/TZarchiver/latest/total?label=latest%20release%20downloads)](https://github.com/SilverGreen93/TZarchiver/releases/latest) ![GitHub all releases](https://img.shields.io/github/downloads/SilverGreen93/TZarchiver/total?label=total%20downloads)
+
 Utility application to read and write Trainz `.tzarc` files.
 
 ![screenshot](assets/screenshot.png)
@@ -95,4 +97,4 @@ This project was possible by doing reverse engineering on the TZarc file format 
 
 - [CDP Explorer](https://github.com/SilverGreen93/CDPExplorer)
 - [Kuid Lister](https://github.com/SilverGreen93/KuidLister)
-- [Kuid2Hash](https://github.com/SilverGreen93/Kuid2Hash)
+- [TZarchiver](https://github.com/SilverGreen93/TZarchiver)
