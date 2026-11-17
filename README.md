@@ -85,10 +85,6 @@ is described here: [TZarc File Format Specification](tzarc-format.md)
 
 For any bugs, issues or feature requests, use the Issues tab in GitHub.
 
-## License
-
-This project is licensed under the MIT License - see [LICENSE.md](LICENSE.md) file for details.
-
 ## Acknowledgments
 
 This project was possible by doing reverse engineering on the TZarc file format and no official information was given in regards to this file format from Auran/N3V.
