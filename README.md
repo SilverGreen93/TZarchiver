@@ -93,4 +93,4 @@ This project was possible by doing reverse engineering on the TZarc file format 
 
 - [CDP Explorer](https://github.com/SilverGreen93/CDPExplorer)
 - [Kuid Lister](https://github.com/SilverGreen93/KuidLister)
-- [TZarchiver](https://github.com/SilverGreen93/TZarchiver)
+- [Kuid2Hash](https://github.com/SilverGreen93/Kuid2Hash)
