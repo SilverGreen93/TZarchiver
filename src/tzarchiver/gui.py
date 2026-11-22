@@ -10,12 +10,13 @@ its state from one run to the next.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import webbrowser
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -54,8 +55,8 @@ PLACEHOLDER_CREATE = "Drag & drop folders here"
 EXTRACT_TAB, CREATE_TAB = 0, 1
 
 # what the GUI carries over from one run to the next, and where it keeps it
-SETTINGS_ORG = "SilverGreen93"
 SETTINGS_APP = "TZarchiver"
+SETTINGS_FILE = "settings.json"
 KEY_V2 = "create/compressed_v2"
 
 
@@ -88,17 +89,49 @@ def _lookup_key(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
 
 
-def _settings() -> QSettings:
-    """The per-user file the GUI keeps its remembered state in.
+def _settings_dir() -> Path:
+    """The per-user folder the settings file lives in.
 
-    IniFormat on purpose: a plain ini file in the usual per-user settings
-    location (%APPDATA%\\SilverGreen93\\TZarchiver.ini on Windows,
-    ~/.config/SilverGreen93/TZarchiver.conf on Linux) instead of registry keys,
-    so it can be read or deleted by hand and travels with the user profile.
+    %APPDATA%\\TZarchiver on Windows, ~/.config/TZarchiver on Linux
+    (XDG_CONFIG_HOME when set) - next to the user's other app settings, so the
+    file can be read or deleted by hand and travels with the user profile.
     """
-    return QSettings(
-        QSettings.Format.IniFormat, QSettings.Scope.UserScope, SETTINGS_ORG, SETTINGS_APP
-    )
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base or os.path.expanduser("~")) / SETTINGS_APP
+
+
+def _settings_path() -> Path:
+    """The settings file itself: <settings dir>/settings.json."""
+    return _settings_dir() / SETTINGS_FILE
+
+
+def _load_settings() -> dict:
+    """The stored settings, or an empty dict when there is nothing usable yet.
+
+    A missing, unreadable or malformed file is not worth a dialog over: the GUI
+    starts from its defaults and the next write replaces the broken file.
+    """
+    try:
+        with _settings_path().open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_settings(values: dict) -> None:
+    """Write the settings back out, creating the folder when it is missing."""
+    path = _settings_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(values, handle, indent=2)
+            handle.write("\n")
+    except OSError:
+        pass  # a read-only or full profile must not stop the app
 
 
 class TzarcWindow(QWidget):
@@ -303,18 +336,19 @@ class TzarcWindow(QWidget):
     @staticmethod
     def _remembered_v2() -> bool:
         """The compressed-v2 choice left by the previous run, off on first use."""
-        return _settings().value(KEY_V2, False, bool)
+        return bool(_load_settings().get(KEY_V2, False))
 
     @staticmethod
     def _remember_v2(checked: bool) -> None:
         """Store the compressed-v2 choice the moment it changes.
 
         Saving on every toggle instead of only at close keeps the last choice
-        even if the window is killed rather than closed.
+        even if the window is killed rather than closed.  Whatever else the
+        file already holds is read back first, so it survives this write.
         """
-        settings = _settings()
-        settings.setValue(KEY_V2, checked)
-        settings.sync()
+        values = _load_settings()
+        values[KEY_V2] = checked
+        _save_settings(values)
 
     # -- drag and drop --------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt naming

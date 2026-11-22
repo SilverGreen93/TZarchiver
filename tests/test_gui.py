@@ -6,6 +6,7 @@ dialog can block the test run.  Everything is skipped when PyQt6 is missing.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -16,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets")
 
-from PyQt6.QtCore import QSettings, QSize  # noqa: E402
+from PyQt6.QtCore import QSize  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 from tzarchiver import gui  # noqa: E402
@@ -27,6 +28,7 @@ from tzarchiver.gui import (  # noqa: E402
     KEY_V2,
     PLACEHOLDER_CREATE,
     PLACEHOLDER_EXTRACT,
+    SETTINGS_FILE,
     TzarcWindow,
 )
 from tzarchiver.tzarc import V1, V2, read_archive  # noqa: E402
@@ -72,9 +74,13 @@ def scratch_settings(tmp_path, monkeypatch):
     write its own choices into the real per-user settings file.  The fixture
     hands back a reader for the same file so a test can play the previous run.
     """
-    path = str(tmp_path / "tzarchiver.ini")
-    monkeypatch.setattr(gui, "_settings", lambda: QSettings(path, QSettings.Format.IniFormat))
-    return lambda: QSettings(path, QSettings.Format.IniFormat)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    def read():
+        return gui._load_settings()
+
+    return read
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +329,7 @@ def test_the_v2_checkbox_starts_off_when_nothing_was_stored(window):
 
 
 def test_a_v2_choice_left_by_an_earlier_run_is_restored(qapp, scratch_settings):
-    settings = scratch_settings()
-    settings.setValue(KEY_V2, True)
-    settings.sync()
+    gui._save_settings({KEY_V2: True})
     assert TzarcWindow().chk_v2.isChecked()
 
 
@@ -349,7 +353,35 @@ def test_the_remembered_choice_creates_v2_archives(window, dialogs, tmp_path, qa
 
 def test_the_choice_is_written_as_soon_as_it_is_ticked(window, qapp, scratch_settings):
     window.chk_v2.setChecked(True)
-    assert scratch_settings().value(KEY_V2, False, bool)
+    assert scratch_settings().get(KEY_V2) is True
+
+
+def test_the_settings_file_is_plain_json(window, qapp):
+    """The file is hand-editable JSON named settings.json under TZarchiver/."""
+    window.chk_v2.setChecked(True)
+    path = gui._settings_path()
+    assert path.name == SETTINGS_FILE and path.parent.name == gui.SETTINGS_APP
+    assert json.loads(path.read_text(encoding="utf-8")) == {KEY_V2: True}
+
+
+def test_a_broken_settings_file_falls_back_to_the_defaults(tmp_path, monkeypatch):
+    """A half-written file must not stop the GUI; it starts unchecked."""
+    folder = tmp_path / gui.SETTINGS_APP
+    folder.mkdir()
+    (folder / SETTINGS_FILE).write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert not TzarcWindow().chk_v2.isChecked()
+
+
+def test_the_settings_folder_is_created_when_it_is_missing(tmp_path, monkeypatch):
+    """First run on a fresh profile: nothing has to exist beforehand."""
+    folder = tmp_path / gui.SETTINGS_APP
+    monkeypatch.setenv("APPDATA", str(folder.parent))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(folder.parent))
+    assert gui._load_settings() == {}
+    gui._save_settings({KEY_V2: True})
+    assert (folder / SETTINGS_FILE).is_file()
 
 
 # ---------------------------------------------------------------------------
