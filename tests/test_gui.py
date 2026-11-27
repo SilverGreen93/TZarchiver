@@ -358,12 +358,22 @@ def test_extract_to_does_nothing_when_the_dialog_is_cancelled(window, dialogs, m
     assert dialogs == []
 
 
-def _patch_question(monkeypatch, answer, asked: list):
-    """Replace the yes/no box with one that records the question and answers it."""
-    monkeypatch.setattr(
-        QMessageBox, "question",
-        staticmethod(lambda parent, title, text, *a, **k: asked.append(text) or answer),
-    )
+def _patch_question(monkeypatch, answers, asked: list, boxes: list | None = None):
+    """Replace the question box's exec: records question and buttons, answers in order.
+
+    ``answers`` may be one button reused for every ask, or a list, one per ask.
+    """
+    from itertools import repeat
+
+    pool = iter(answers if isinstance(answers, (list, tuple)) else repeat(answers))
+
+    def fake_exec(box):
+        asked.append(box.text())
+        if boxes is not None:
+            boxes.append(box.standardButtons())
+        return next(pool)
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
 
 
 def test_extract_to_overwrites_an_existing_file_after_asking(window, dialogs, monkeypatch, tmp_path):
@@ -432,9 +442,137 @@ def test_extract_to_asks_nothing_when_the_target_is_new(window, dialogs, monkeyp
     def no_question(*a, **k):
         raise AssertionError("asked to overwrite when nothing was there")
 
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(no_question))
+    monkeypatch.setattr(QMessageBox, "exec", no_question)
     window.on_extract_to(window.tv_extract.topLevelItem(0).child(1))  # the folder row
     assert (dest / "folder" / "fisier.txt").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Extract all / Create all overwrite prompts
+# ---------------------------------------------------------------------------
+
+B = QMessageBox.StandardButton
+
+
+def _copy_two_archives(tmp_path):
+    made = []
+    for name in ("one", "two"):
+        archive = tmp_path / f"{name}.tzarc"
+        archive.write_bytes(FOLDER_ARCHIVE.read_bytes())
+        made.append(archive)
+    return made
+
+
+def test_extract_all_asks_before_reusing_an_existing_folder(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    (tmp_path / archive.stem).mkdir()
+    window.load_paths([str(archive)])
+    asked, boxes = [], []
+    _patch_question(monkeypatch, B.Yes, asked, boxes)
+    window.on_extract()
+    assert asked and archive.stem in asked[0]
+    assert boxes[0] == B.Yes | B.No  # a one-item queue gets the plain Yes/No box
+    assert (tmp_path / archive.stem / "config.chump").is_file()
+    assert ("info", "Finished extracting files") in dialogs
+
+
+def test_extract_all_skips_the_archive_when_answered_no(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    made = tmp_path / archive.stem
+    made.mkdir()
+    (made / "keep.txt").write_text("mine", encoding="utf-8")
+    window.load_paths([str(archive)])
+    _patch_question(monkeypatch, B.No, [])
+    window.on_extract()
+    assert sorted(p.name for p in made.iterdir()) == ["keep.txt"]
+
+
+def test_extract_all_offers_yes_to_all_once_and_replaces_everything(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    for stem in (a1.stem, a2.stem):
+        (tmp_path / stem).mkdir()
+    window.load_paths([str(a1), str(a2)])
+    asked, boxes = [], []
+    _patch_question(monkeypatch, [B.YesAll], asked, boxes)
+    window.on_extract()
+    assert len(asked) == 1  # Yes to All covers the second archive
+    assert boxes[0] == B.Yes | B.No | B.YesAll | B.NoAll | B.Cancel
+    assert (tmp_path / a1.stem / "config.chump").is_file()
+    assert (tmp_path / a2.stem / "config.chump").is_file()
+
+
+def test_extract_all_no_to_all_skips_every_existing_folder(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    for stem in (a1.stem, a2.stem):
+        (tmp_path / stem).mkdir()
+    window.load_paths([str(a1), str(a2)])
+    _patch_question(monkeypatch, [B.NoAll], [])
+    window.on_extract()
+    assert not [p for stem in (a1.stem, a2.stem) for p in (tmp_path / stem).iterdir()]
+
+
+def test_extract_all_asks_again_per_item_on_plain_yes_or_no(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    for stem in (a1.stem, a2.stem):
+        (tmp_path / stem).mkdir()
+    window.load_paths([str(a1), str(a2)])
+    asked = []
+    _patch_question(monkeypatch, [B.Yes, B.No], asked)
+    window.on_extract()
+    assert len(asked) == 2  # a plain answer only settles this item
+    assert (tmp_path / a1.stem / "config.chump").is_file()
+    assert not (tmp_path / a2.stem / "config.chump").exists()
+
+
+def test_extract_all_cancel_stops_the_whole_run(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    for stem in (a1.stem, a2.stem):
+        (tmp_path / stem).mkdir()
+    window.load_paths([str(a1), str(a2)])
+    _patch_question(monkeypatch, [B.Cancel], [])
+    window.on_extract()
+    assert not [p for stem in (a1.stem, a2.stem) for p in (tmp_path / stem).iterdir()]
+    assert dialogs == []  # a cancelled run says nothing more
+
+
+def test_create_all_asks_before_replacing_an_existing_archive(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    source.with_suffix(".tzarc").write_bytes(b"old archive")
+    window.load_paths([str(source)])
+    asked = []
+    _patch_question(monkeypatch, B.Yes, asked)
+    window.on_create()
+    assert asked and f"{source.name}.tzarc" in asked[0]
+    assert read_archive(source.with_suffix(".tzarc")).names() == ["config.chump", "folder/fisier.txt"]
+
+
+def test_create_all_keeps_the_archive_when_answered_no(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    made = source.with_suffix(".tzarc")
+    made.write_bytes(b"old archive")
+    window.load_paths([str(source)])
+    _patch_question(monkeypatch, B.No, [])
+    window.on_create()
+    assert made.read_bytes() == b"old archive"
+
+
+def test_create_all_yes_to_all_replaces_every_existing_archive(window, dialogs, monkeypatch, tmp_path):
+    sources = []
+    for name in ("one", "two"):
+        source = tmp_path / name
+        shutil.copytree(FOLDER, source)
+        source.with_suffix(".tzarc").write_bytes(b"old")
+        sources.append(source)
+    window.load_paths([str(s) for s in sources])
+    asked, boxes = [], []
+    _patch_question(monkeypatch, [B.YesAll], asked, boxes)
+    window.on_create()
+    assert len(asked) == 1
+    assert boxes[0] == B.Yes | B.No | B.YesAll | B.NoAll | B.Cancel
+    for source in sources:
+        assert read_archive(source.with_suffix(".tzarc")).names() == ["config.chump", "folder/fisier.txt"]
 
 
 def test_the_right_click_menu_offers_extract_to_and_runs_it(window, dialogs, monkeypatch, tmp_path):

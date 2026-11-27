@@ -327,13 +327,28 @@ class TzarcWindow(QWidget):
 
     # -- actions --------------------------------------------------------------
     def on_extract(self) -> None:
-        """Extract every queued archive, as the Extract all button does."""
+        """Extract every queued archive, as the Extract all button does.
+
+        Archives whose extraction folder already exists get an overwrite
+        question first; Cancel stops the whole run.
+        """
+        multiple = len(self.extract_files) > 1
+        mode = "ask"
         for path in self.extract_files:
             if not Path(path).is_file():
                 continue
+            dest = default_extract_dir(path)
+            if dest.exists():
+                choice = self._overwrite_choice(dest, multiple, mode)
+                if choice == "cancel":
+                    return
+                if choice in ("all", "none"):
+                    mode = choice
+                if choice in ("no", "none"):
+                    continue
             try:
                 archive = read_archive(path)
-                archive.extract(default_extract_dir(path))
+                archive.extract(dest)
             except (TzarcError, OSError) as exc:
                 self._error(exc, path)
                 continue
@@ -373,7 +388,7 @@ class TzarcWindow(QWidget):
             target = Path(dest) / Path(value.replace("\\", "/")).name
         else:
             target = Path(dest) / value.replace("\\", "/").split("/")[-1]
-        if target.exists() and not self._confirm_overwrite(target):
+        if target.exists() and self._ask_overwrite(target) != QMessageBox.StandardButton.Yes:
             return
         try:
             archive = read_archive(archive_path)
@@ -388,27 +403,72 @@ class TzarcWindow(QWidget):
             return
         self._info(f"Finished extracting from {Path(archive_path).name}")
 
-    def _confirm_overwrite(self, target: Path) -> bool:
-        """Ask whether the already existing extraction target may be overwritten."""
-        answer = QMessageBox.question(
-            self,
-            "Already exists",
-            f"{target.name} already exists in the destination.\nOverwrite it?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return answer == QMessageBox.StandardButton.Yes
+    def _ask_overwrite(self, target: Path, multiple: bool = False):
+        """Ask whether ``target``, which already exists, may be overwritten.
+
+        A plain Yes/No box by default; when the action covers a longer queue
+        it also offers Yes to All, No to All and Cancel so one click can
+        settle the rest of the run.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Already exists")
+        box.setText(f"{target.name} already exists.\nOverwrite it?")
+        box.setIcon(QMessageBox.Icon.Question)
+        buttons = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        if multiple:
+            buttons |= (
+                QMessageBox.StandardButton.YesAll
+                | QMessageBox.StandardButton.NoAll
+                | QMessageBox.StandardButton.Cancel
+            )
+        box.setStandardButtons(buttons)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec()
+
+    _OVERWRITE_ANSWERS = {
+        QMessageBox.StandardButton.Yes: "yes",
+        QMessageBox.StandardButton.No: "no",
+        QMessageBox.StandardButton.YesAll: "all",
+        QMessageBox.StandardButton.NoAll: "none",
+        QMessageBox.StandardButton.Cancel: "cancel",
+    }
+
+    def _overwrite_choice(self, target: Path, multiple: bool, mode: str) -> str:
+        """Decide about ``target`` for the queue loop.
+
+        ``mode`` carries a previous Yes/No to All ("all"/"none") or asks now.
+        Returns yes (overwrite this one), no (skip it), all/none (the new
+        standing answer) or cancel (stop the run).
+        """
+        if mode == "all":
+            return "yes"
+        if mode == "none":
+            return "no"
+        return self._OVERWRITE_ANSWERS[self._ask_overwrite(target, multiple)]
 
     def on_create(self) -> None:
         """Archive every queued folder, as the Create all button does.
 
-        The compressed v2 checkbox switches the output to version 2.
+        The compressed v2 checkbox switches the output to version 2; folders
+        whose <name>.tzarc already exists get an overwrite question first,
+        and Cancel stops the whole run.
         """
         version = V2 if self.chk_v2.isChecked() else V1
+        multiple = len(self.create_dirs) > 1
+        mode = "ask"
         for path in self.create_dirs:
+            target = Path(str(path) + ".tzarc")
+            if target.exists():
+                choice = self._overwrite_choice(target, multiple, mode)
+                if choice == "cancel":
+                    return
+                if choice in ("all", "none"):
+                    mode = choice
+                if choice in ("no", "none"):
+                    continue
             try:
                 archive = create_archive(path, version=version)
-                archive.write(str(path) + ".tzarc", version=version)
+                archive.write(target, version=version)
             except (TzarcError, OSError) as exc:
                 self._error(exc, path)
                 continue
