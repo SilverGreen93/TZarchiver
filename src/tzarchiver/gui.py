@@ -3,8 +3,9 @@
 A resizable portrait window with a tabbed queue: the Extract tab lists the
 tzarc files dropped on the window (each expanded with its contents), the
 Create tab lists the folders to archive (expanded with their files).  The
-Extract all / Create all button for the current tab and Clear list sit below
-the tabs.  Right-clicking any entry in the Extract tree offers "Extract to...",
+Extract all / Extract all to... and Create all / Create all to... buttons
+for the current tab and Clear list sit below the tabs.  Right-clicking any
+entry in the Extract tree offers "Extract to...",
 which unpacks that one file, folder or whole archive into a chosen destination;
 right-clicking a queued folder in the Create tree offers "Create in...", which
 writes its archive into a chosen destination.  Both menus can also "Remove" a
@@ -191,18 +192,22 @@ class TzarcWindow(QWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.tabs, 1)
 
-        # action row below the tabs; only the current tab's button is shown
+        # action row below the tabs; only the current tab's buttons are shown
         actions = QHBoxLayout()
         actions.setSpacing(4)
         self.btn_extract = QPushButton("Extract all")
+        self.btn_extract_to = QPushButton("Extract all to...")
         self.btn_create = QPushButton("Create all")
+        self.btn_create_to = QPushButton("Create all to...")
         self.btn_clear = QPushButton("Clear list")
-        buttons = (self.btn_extract, self.btn_create, self.btn_clear)
+        buttons = (self.btn_extract, self.btn_extract_to, self.btn_create, self.btn_create_to, self.btn_clear)
         width = max(button.sizeHint().width() for button in buttons)
         for button in buttons:
             button.setMinimumSize(width, 23)
         actions.addWidget(self.btn_extract)
+        actions.addWidget(self.btn_extract_to)
         actions.addWidget(self.btn_create)
+        actions.addWidget(self.btn_create_to)
         actions.addStretch(1)
         actions.addWidget(self.btn_clear)
         outer.addLayout(actions)
@@ -218,7 +223,9 @@ class TzarcWindow(QWidget):
         outer.addLayout(footer)
 
         self.btn_extract.clicked.connect(self.on_extract)
+        self.btn_extract_to.clicked.connect(self.on_extract_all_to)
         self.btn_create.clicked.connect(self.on_create)
+        self.btn_create_to.clicked.connect(self.on_create_all_to)
         self.btn_clear.clicked.connect(self.on_clear)
 
         self._on_tab_changed(self.tabs.currentIndex())
@@ -250,12 +257,16 @@ class TzarcWindow(QWidget):
 
     def _on_tab_changed(self, index: int) -> None:
         self.btn_extract.setVisible(index == EXTRACT_TAB)
+        self.btn_extract_to.setVisible(index == EXTRACT_TAB)
         self.btn_create.setVisible(index == CREATE_TAB)
+        self.btn_create_to.setVisible(index == CREATE_TAB)
 
     def _update_buttons(self) -> None:
         """Keep the action buttons in step with the two queues."""
         self.btn_extract.setEnabled(bool(self.extract_files))
+        self.btn_extract_to.setEnabled(bool(self.extract_files))
         self.btn_create.setEnabled(bool(self.create_dirs))
+        self.btn_create_to.setEnabled(bool(self.create_dirs))
 
     # -- queue ------------------------------------------------------------------
     def load_paths(self, paths: list[str]) -> None:
@@ -335,19 +346,33 @@ class TzarcWindow(QWidget):
 
     # -- actions --------------------------------------------------------------
     def on_extract(self) -> None:
-        """Extract every queued archive, as the Extract all button does.
+        """Extract every queued archive beside itself, as the Extract all button does."""
+        self._extract_queue(None)
 
-        Archives whose extraction folder already exists get an overwrite
-        question first; Cancel stops the whole run.
+    def on_extract_all_to(self) -> None:
+        """Extract every queued archive into a destination folder the user picks.
+
+        Each archive lands in a folder named after it, like the context menu.
+        """
+        dest = QFileDialog.getExistingDirectory(self, "Extract all to...")
+        if not dest:
+            return  # dialog cancelled: leave everything alone
+        self._extract_queue(Path(dest))
+
+    def _extract_queue(self, dest: Path | None) -> None:
+        """Unpack every queued archive into ``dest``, or beside itself when None.
+
+        Extraction folders that already exist get an overwrite question first;
+        Cancel stops the whole run.
         """
         multiple = len(self.extract_files) > 1
         mode = "ask"
         for path in self.extract_files:
             if not Path(path).is_file():
                 continue
-            dest = default_extract_dir(path)
-            if dest.exists():
-                choice = self._overwrite_choice(dest, multiple, mode)
+            target = default_extract_dir(path) if dest is None else dest / Path(path).stem
+            if target.exists():
+                choice = self._overwrite_choice(target, multiple, mode)
                 if choice == "cancel":
                     return
                 if choice in ("all", "none"):
@@ -356,7 +381,7 @@ class TzarcWindow(QWidget):
                     continue
             try:
                 archive = read_archive(path)
-                archive.extract(dest)
+                archive.extract(target)
             except (TzarcError, OSError) as exc:
                 self._error(exc, path)
                 continue
@@ -459,17 +484,32 @@ class TzarcWindow(QWidget):
         return self._OVERWRITE_ANSWERS[self._ask_overwrite(target, multiple)]
 
     def on_create(self) -> None:
-        """Archive every queued folder, as the Create all button does.
+        """Archive every queued folder beside itself, as the Create all button does."""
+        self._create_queue(None)
 
-        The compressed v2 checkbox switches the output to version 2; folders
-        whose <name>.tzarc already exists get an overwrite question first,
-        and Cancel stops the whole run.
+    def on_create_all_to(self) -> None:
+        """Archive every queued folder into a destination folder the user picks."""
+        dest = QFileDialog.getExistingDirectory(self, "Create all to...")
+        if not dest:
+            return  # dialog cancelled: leave everything alone
+        self._create_queue(Path(dest))
+
+    def _create_queue(self, dest: Path | None) -> None:
+        """Write every queued folder's archive into ``dest``, or beside itself.
+
+        The compressed v2 checkbox switches the output to version 2; archives
+        that already exist get an overwrite question first, and Cancel stops
+        the whole run.
         """
         version = V2 if self.chk_v2.isChecked() else V1
         multiple = len(self.create_dirs) > 1
         mode = "ask"
         for path in self.create_dirs:
-            target = Path(str(path) + ".tzarc")
+            target = (
+                Path(str(path) + ".tzarc")
+                if dest is None
+                else dest / (Path(path).name + ".tzarc")
+            )
             if target.exists():
                 choice = self._overwrite_choice(target, multiple, mode)
                 if choice == "cancel":

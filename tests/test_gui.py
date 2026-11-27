@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets")
 
-from PyQt6.QtCore import QPoint, QSize, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMenu, QMessageBox  # noqa: E402
 
 from tzarchiver import gui  # noqa: E402
@@ -92,8 +92,10 @@ def test_window_title_carries_the_version(window):
 
 
 def test_window_is_resizable_and_starts_portrait_at_the_minimum(window):
-    assert window.size() == window.minimumSize() == QSize(380, 480)
+    assert window.size() == window.minimumSize()
     assert window.minimumSize() != window.maximumSize()
+    # the button row sets the floor for the width, the explicit 480 for the height
+    assert window.minimumSize().width() >= 380 and window.minimumSize().height() == 480
 
 
 def test_two_tabs_host_the_two_queues(window):
@@ -107,29 +109,40 @@ def test_v2_checkbox_lives_on_the_create_tab_only(window):
     assert not window.tabs.widget(EXTRACT_TAB).isAncestorOf(window.chk_v2)
 
 
-def test_the_current_tabs_button_is_the_one_shown(window):
-    assert window.btn_extract.isVisibleTo(window)
-    assert not window.btn_create.isVisibleTo(window)
+def test_the_current_tabs_buttons_are_the_ones_shown(window):
+    extract = (window.btn_extract, window.btn_extract_to)
+    create = (window.btn_create, window.btn_create_to)
+    for button in extract:
+        assert button.isVisibleTo(window)
+    for button in create:
+        assert not button.isVisibleTo(window)
     window.tabs.setCurrentIndex(CREATE_TAB)
-    assert window.btn_create.isVisibleTo(window)
-    assert not window.btn_extract.isVisibleTo(window)
+    for button in create:
+        assert button.isVisibleTo(window)
+    for button in extract:
+        assert not button.isVisibleTo(window)
 
 
 def test_action_buttons_share_one_width_and_a_short_height(window):
-    sizes = {b.minimumSize() for b in (window.btn_extract, window.btn_create, window.btn_clear)}
+    buttons = (window.btn_extract, window.btn_extract_to, window.btn_create, window.btn_create_to, window.btn_clear)
+    sizes = {b.minimumSize() for b in buttons}
     assert len(sizes) == 1
     assert next(iter(sizes)).height() == 23
 
 
 def test_action_buttons_follow_their_queue(window):
     assert not window.btn_extract.isEnabled()
+    assert not window.btn_extract_to.isEnabled()
     assert not window.btn_create.isEnabled()
+    assert not window.btn_create_to.isEnabled()
     window.load_paths([str(FOLDER_ARCHIVE)])
     assert window.btn_extract.isEnabled()
+    assert window.btn_extract_to.isEnabled()
     assert not window.btn_create.isEnabled()
     window.tabs.setCurrentIndex(EXTRACT_TAB)
     window.on_clear()
     assert not window.btn_extract.isEnabled()
+    assert not window.btn_extract_to.isEnabled()
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +613,100 @@ def test_create_all_yes_to_all_replaces_every_existing_archive(window, dialogs, 
     assert boxes[0] == B.Yes | B.No | B.YesAll | B.NoAll | B.Cancel
     for source in sources:
         assert read_archive(source.with_suffix(".tzarc")).names() == ["config.chump", "folder/fisier.txt"]
+
+
+# ---------------------------------------------------------------------------
+# Extract all to... / Create all to... buttons
+# ---------------------------------------------------------------------------
+
+def test_extract_all_to_unpacks_every_archive_into_the_chosen_folder(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    window.load_paths([str(a1), str(a2)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_extract_all_to()
+    assert (dest / "one" / "config.chump").read_bytes() == (FOLDER / "config.chump").read_bytes()
+    assert (dest / "two" / "folder" / "fisier.txt").read_bytes() == b"abcdabcdabcd"
+    assert not (tmp_path / "one").exists()  # nothing lands beside the archives
+    assert ("info", "Finished extracting files") in dialogs
+
+
+def test_extract_all_to_does_nothing_when_the_dialog_is_cancelled(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    window.load_paths([str(a1), str(a2)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
+    window.on_extract_all_to()
+    assert not (tmp_path / "one").exists()
+    assert dialogs == []
+
+
+def test_extract_all_to_asks_once_about_existing_targets_with_full_buttons(window, dialogs, monkeypatch, tmp_path):
+    a1, a2 = _copy_two_archives(tmp_path)
+    dest = tmp_path / "out"
+    for name in ("one", "two"):
+        (dest / name).mkdir(parents=True)
+    window.load_paths([str(a1), str(a2)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked, boxes = [], []
+    _patch_question(monkeypatch, [B.YesAll], asked, boxes)
+    window.on_extract_all_to()
+    assert len(asked) == 1  # Yes to All covers both archives
+    assert boxes[0] == B.Yes | B.No | B.YesAll | B.NoAll | B.Cancel
+    assert (dest / "one" / "config.chump").is_file()
+    assert (dest / "two" / "config.chump").is_file()
+
+
+def test_extract_all_to_asks_plain_yes_no_for_a_one_item_queue(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    dest = tmp_path / "out"
+    (dest / archive.stem).mkdir(parents=True)
+    window.load_paths([str(archive)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked, boxes = [], []
+    _patch_question(monkeypatch, B.No, asked, boxes)
+    window.on_extract_all_to()
+    assert boxes[0] == B.Yes | B.No
+    assert not (dest / archive.stem / "config.chump").exists()
+
+
+def test_create_all_to_archives_every_folder_into_the_chosen_folder(window, dialogs, monkeypatch, tmp_path):
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    shutil.copytree(FOLDER, one)
+    shutil.copytree(FOLDER, two)
+    window.load_paths([str(one), str(two)])
+    dest = tmp_path / "out"
+    dest.mkdir()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_create_all_to()
+    for name in ("one", "two"):
+        made = read_archive(dest / f"{name}.tzarc")
+        assert made.names() == ["config.chump", "folder/fisier.txt"]
+        assert made.version == V1
+    assert not (tmp_path / "one.tzarc").exists()  # nothing lands beside the sources
+    assert ("info", "Finished creating archives") in dialogs
+
+
+def test_create_all_to_honors_the_v2_checkbox(window, dialogs, monkeypatch, tmp_path):
+    one = tmp_path / "one"
+    shutil.copytree(FOLDER, one)
+    window.chk_v2.setChecked(True)
+    window.load_paths([str(one)])
+    dest = tmp_path / "out"
+    dest.mkdir()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_create_all_to()
+    assert read_archive(dest / "one.tzarc").version == V2
+
+
+def test_create_all_to_does_nothing_when_the_dialog_is_cancelled(window, dialogs, monkeypatch, tmp_path):
+    one = tmp_path / "one"
+    shutil.copytree(FOLDER, one)
+    window.load_paths([str(one)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
+    window.on_create_all_to()
+    assert not (tmp_path / "one.tzarc").exists()
+    assert dialogs == []
 
 
 # ---------------------------------------------------------------------------
