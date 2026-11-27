@@ -300,9 +300,9 @@ def _copy_archive(tmp_path):
     return archive
 
 
-def test_only_the_extract_tree_has_a_context_menu(window):
+def test_both_trees_have_their_own_context_menu(window):
     assert window.tv_extract.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
-    assert window.tv_create.contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu
+    assert window.tv_create.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
 
 
 def test_extract_to_on_the_archive_unpacks_into_a_folder_named_after_it(window, dialogs, monkeypatch, tmp_path):
@@ -573,6 +573,114 @@ def test_create_all_yes_to_all_replaces_every_existing_archive(window, dialogs, 
     assert boxes[0] == B.Yes | B.No | B.YesAll | B.NoAll | B.Cancel
     for source in sources:
         assert read_archive(source.with_suffix(".tzarc")).names() == ["config.chump", "folder/fisier.txt"]
+
+
+# ---------------------------------------------------------------------------
+# create tab context menu (Create in...)
+# ---------------------------------------------------------------------------
+
+def test_only_the_queued_folder_row_gets_the_create_menu(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.load_paths([str(source)])
+    window.show()
+    qapp = QApplication.instance()
+    qapp.processEvents()
+    tree = window.tv_create
+    dest = tmp_path / "out"
+    dest.mkdir()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    opened = []
+
+    def fake_exec(menu, pos):
+        opened.append([a.text() for a in menu.actions()])
+        return menu.actions()[0]  # as if Create in... had been clicked
+
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    rect = tree.visualItemRect(tree.topLevelItem(0))
+    assert rect.isValid() and not rect.isNull()
+    window._show_create_menu(rect.center())
+    assert opened == [["Create in..."]]
+
+    def no_menu(*a):
+        opened.append("menu over a file row")
+
+    monkeypatch.setattr(QMenu, "exec", no_menu)
+    leaf = tree.topLevelItem(0).child(0)
+    if not tree.visualItemRect(leaf).isValid():  # the row scrolled out of the narrow view
+        tree.setCurrentItem(leaf)
+        qapp.processEvents()
+    window._show_create_menu(tree.visualItemRect(leaf).center())
+    assert opened == [["Create in..."]]  # the file row stayed silent
+
+
+def test_create_in_writes_the_archive_into_the_chosen_folder(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.load_paths([str(source)])
+    dest = tmp_path / "out"
+    dest.mkdir()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_create_in(window.tv_create.topLevelItem(0))
+    made = dest / "folder.tzarc"
+    assert read_archive(made).names() == ["config.chump", "folder/fisier.txt"]
+    assert read_archive(made).version == V1
+    assert not (tmp_path / "folder.tzarc").exists()  # nothing beside the source
+    assert ("info", "Finished creating archive for folder") in dialogs
+
+
+def test_create_in_follows_the_v2_checkbox(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.chk_v2.setChecked(True)
+    window.load_paths([str(source)])
+    dest = tmp_path / "out"
+    dest.mkdir()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_create_in(window.tv_create.topLevelItem(0))
+    assert read_archive(dest / "folder.tzarc").version == V2
+
+
+def test_create_in_does_nothing_when_the_dialog_is_cancelled(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.load_paths([str(source)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
+    window.on_create_in(window.tv_create.topLevelItem(0))
+    assert not (tmp_path / "folder.tzarc").exists()
+    assert dialogs == []
+
+
+def test_create_in_asks_before_replacing_an_existing_archive(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    made = dest / "folder.tzarc"
+    made.write_bytes(b"old archive")
+    window.load_paths([str(source)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked = []
+    _patch_question(monkeypatch, B.No, asked)
+    window.on_create_in(window.tv_create.topLevelItem(0))
+    assert asked and "folder.tzarc" in asked[0]
+    assert made.read_bytes() == b"old archive"
+    assert dialogs == []
+
+
+def test_create_in_replaces_the_archive_after_asking(window, dialogs, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / "folder.tzarc").write_bytes(b"old archive")
+    window.load_paths([str(source)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked = []
+    _patch_question(monkeypatch, B.Yes, asked)
+    window.on_create_in(window.tv_create.topLevelItem(0))
+    assert asked and "folder.tzarc" in asked[0]
+    assert read_archive(dest / "folder.tzarc").names() == ["config.chump", "folder/fisier.txt"]
 
 
 def test_the_right_click_menu_offers_extract_to_and_runs_it(window, dialogs, monkeypatch, tmp_path):

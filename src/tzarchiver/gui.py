@@ -5,7 +5,9 @@ tzarc files dropped on the window (each expanded with its contents), the
 Create tab lists the folders to archive (expanded with their files).  The
 Extract all / Create all button for the current tab and Clear list sit below
 the tabs.  Right-clicking any entry in the Extract tree offers "Extract to...",
-which unpacks that one file, folder or whole archive into a chosen destination.
+which unpacks that one file, folder or whole archive into a chosen destination;
+right-clicking a queued folder in the Create tree offers "Create in...", which
+writes its archive into a chosen destination.
 The compressed v2 checkbox belongs to the Create tab only and keeps
 its state from one run to the next.
 """
@@ -58,8 +60,10 @@ PLACEHOLDER_CREATE = "Drag & drop folders here"
 
 EXTRACT_TAB, CREATE_TAB = 0, 1
 
-# what an extract-tree row stands for, kept in the row's UserRole data
+# what a tree row stands for, kept in the row's UserRole data
 TZARC_ENTRY, FOLDER_ENTRY, FILE_ENTRY = "tzarc", "folder", "file"
+# the create tree's top-level rows are queued folders on disk
+QUEUED_FOLDER_ENTRY = "queued folder"
 
 # what the GUI carries over from one run to the next, and where it keeps it
 SETTINGS_APP = "TZarchiver"
@@ -172,6 +176,8 @@ class TzarcWindow(QWidget):
         self.tabs.addTab(self.tv_extract, "Extract")
 
         self.tv_create = self._make_tree(PLACEHOLDER_CREATE)
+        self.tv_create.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tv_create.customContextMenuRequested.connect(self._show_create_menu)
         self.chk_v2 = QCheckBox("Create compressed v2 archives (TRS22+)")
         self.chk_v2.setChecked(self._remembered_v2())
         self.chk_v2.toggled.connect(self._remember_v2)
@@ -318,6 +324,7 @@ class TzarcWindow(QWidget):
         self.create_dirs.append(path)
         self._update_buttons()
         root = QTreeWidgetItem([Path(path).name])
+        root.setData(0, Qt.ItemDataRole.UserRole, (QUEUED_FOLDER_ENTRY, path))
         self.tv_create.addTopLevelItem(root)
         base = Path(path)
         for child in sorted(base.rglob("*")):
@@ -473,6 +480,43 @@ class TzarcWindow(QWidget):
                 self._error(exc, path)
                 continue
         self._info("Finished creating archives")
+
+    def _show_create_menu(self, pos) -> None:
+        """Right-click menu for the create tree: Create in... on a queued folder.
+
+        Only the top-level folder rows get the menu; the file rows below them
+        are not archives waiting to be created on their own.
+        """
+        item = self.tv_create.itemAt(pos)
+        if item is None or item.parent() is not None or not item.data(0, Qt.ItemDataRole.UserRole):
+            return  # empty space, the drag hint or a file row: no menu
+        menu = QMenu(self)
+        action = menu.addAction("Create in...")
+        chosen = menu.exec(self.tv_create.viewport().mapToGlobal(pos))
+        if chosen is action:
+            self.on_create_in(item)
+
+    def on_create_in(self, item: QTreeWidgetItem) -> None:
+        """Write <folder>.tzarc for the right-clicked queued folder into a
+        destination folder the user picks, honoring the compressed v2 checkbox.
+
+        An archive that already sits there gets an overwrite question first.
+        """
+        _, folder_path = item.data(0, Qt.ItemDataRole.UserRole)
+        dest = QFileDialog.getExistingDirectory(self, "Create in...", str(Path(folder_path).parent))
+        if not dest:
+            return  # dialog cancelled: leave everything alone
+        target = Path(dest) / (Path(folder_path).name + ".tzarc")
+        if target.exists() and self._ask_overwrite(target) != QMessageBox.StandardButton.Yes:
+            return
+        version = V2 if self.chk_v2.isChecked() else V1
+        try:
+            archive = create_archive(folder_path, version=version)
+            archive.write(target, version=version)
+        except (TzarcError, OSError) as exc:
+            self._error(exc, folder_path)
+            return
+        self._info(f"Finished creating archive for {Path(folder_path).name}")
 
     def on_clear(self) -> None:
         """Empty the list of the tab on screen and show its hint again."""
