@@ -17,7 +17,14 @@ import zlib
 from pathlib import Path
 from typing import BinaryIO, Iterable, Iterator, Sequence
 
-from .archive import ArchiveBase, ArchiveError, Entry, default_extract_dir
+from .archive import (
+    ArchiveBase,
+    ArchiveError,
+    ArchiveTask,
+    Entry,
+    ReportingFile,
+    default_extract_dir,
+)
 
 __all__ = [
     "MAGIC",
@@ -86,18 +93,32 @@ class Archive(ArchiveBase):
         return f"v{self.version}"
 
     # -- output -----------------------------------------------------------
-    def write(self, path: str | Path, version: int | None = None) -> Path:
-        """Serialize the archive to ``path`` (``TZac`` header + body)."""
+    def write(self, path: str | Path, version: int | None = None, task: ArchiveTask | None = None) -> Path:
+        """Serialize the archive to ``path`` (``TZac`` header + body).
+
+        ``task`` follows the two slow stretches: packing/compressing the body
+        and writing it out.
+        """
+        ArchiveTask.check(task)
         version = self.version if version is None else version
         path = Path(path)
         body = pack_v1(self.entries, (self.read(e.name) for e in self.entries))
         if version == V1:
             payload = body
         elif version == V2:
-            payload = _make_v2_payload(body)
+            payload = _make_v2_payload(body, task)
         else:
             raise TzarcError(f"TZarc version {version} is not supported!")
-        path.write_bytes(MAGIC + version.to_bytes(4, "big") + payload)
+        header = MAGIC + version.to_bytes(4, "big")
+        if task is None:
+            path.write_bytes(header + payload)
+        else:
+            task.plan(len(header) + len(payload))
+            task.starting(path.name)
+            with path.open("wb") as handle:
+                reporter = ReportingFile(handle, task)
+                reporter.write(header)
+                reporter.write(payload)
         return path
 
     # -- extracting (the how of it; archive.py drives the where) ----------
@@ -124,11 +145,12 @@ def read_archive(path: str | Path) -> Archive:
     return Archive(version, entries, contents)
 
 
-def create_archive(source: str | Path, version: int = V1) -> Archive:
+def create_archive(source: str | Path, version: int = V1, task: ArchiveTask | None = None) -> Archive:
     """Build an archive from a folder (or a single file), like the app does.
 
     Files are collected recursively; their names inside the archive are the
-    paths relative to ``source`` with forward slashes.
+    paths relative to ``source`` with forward slashes.  ``task`` follows the
+    reading, which is the slow part of the job for a folder of many files.
     """
     source = Path(source)
     if source.is_file():
@@ -138,13 +160,20 @@ def create_archive(source: str | Path, version: int = V1) -> Archive:
         files = [p for p in sorted(source.rglob("*")) if p.is_file()]
         root = source
 
+    if task is not None:
+        task.plan(sum(file.stat().st_size for file in files))
     entries: list[Entry] = []
     contents: list[bytes] = []
     for file in files:
+        ArchiveTask.check(task)
         name = file.relative_to(root).as_posix()
+        if task is not None:
+            task.starting(name)
         data = file.read_bytes()
         entries.append(Entry(name, len(data)))
         contents.append(data)
+        if task is not None:
+            task.work(len(data))
     return Archive(version, entries, contents)
 
 
@@ -226,10 +255,21 @@ def unpack_v2(payload: bytes) -> bytes:
     return bytes(body)
 
 
-def _make_v2_payload(body: bytes) -> bytes:
-    """Wrap a version 1 body in the v2 block layout."""
+def _make_v2_payload(body: bytes, task: ArchiveTask | None = None) -> bytes:
+    """Wrap a version 1 body in the v2 block layout.
+
+    ``task`` is walked block by block: compressing a big body is the part of
+    creating a v2 archive that takes a while.
+    """
+    if task is not None:
+        task.plan(len(body))
     chunks = [body[i : i + CHUNK_SIZE] for i in range(0, len(body), CHUNK_SIZE)]
-    compressed = [zlib.compress(chunk) for chunk in chunks]
+    compressed = []
+    for chunk in chunks:
+        ArchiveTask.check(task)
+        compressed.append(zlib.compress(chunk))
+        if task is not None:
+            task.work(len(chunk))
     out = bytearray(struct.pack("<Q", len(body)))
     out += struct.pack("<I", len(chunks))
     for chunk in compressed:

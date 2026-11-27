@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PyQt6.QtWidgets")
 
 from PyQt6.QtCore import QPoint, Qt  # noqa: E402
+from PyQt6.QtGui import QCloseEvent  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QFileDialog,
@@ -28,6 +31,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 )
 
 from tzarchiver import gui  # noqa: E402
+from tzarchiver.archive import Cancelled  # noqa: E402
 from tzarchiver.gui import (  # noqa: E402
     APP_TITLE,
     CREATE_TAB,
@@ -88,6 +92,28 @@ def scratch_settings(tmp_path, monkeypatch):
         return gui._load_settings()
 
     return read
+
+
+def _run_here(self, *args, **kwargs):
+    """Do a job's work on the spot, instead of in its own thread."""
+    self.run()
+
+
+@pytest.fixture(autouse=True)
+def jobs_run_on_the_spot():
+    """Keep the window's buttons synchronous for the tests that press them.
+
+    Extract and create normally go off to a worker thread, whose reports only
+    arrive through the event loop; a test that clicks Extract all would be
+    looking at a queue it has not touched yet.  Running the job right there
+    means the assertions about folders and message boxes read the same as they
+    ever did, and the two job tests below put the real thread back.
+    """
+    gui._ArchiveJob.start = _run_here
+    try:
+        yield
+    finally:
+        del gui._ArchiveJob.start
 
 
 # ---------------------------------------------------------------------------
@@ -1309,3 +1335,129 @@ def test_footer_link_shares_the_copyright_row(window, qapp):
     credit = next(w for w in window.findChildren(QLabel) if "©" in w.text())
     # same footer row: credit at the left, link at the right, same y
     assert credit.y() == link.y() and credit.x() < link.x()
+
+
+# ---------------------------------------------------------------------------
+# the job in progress: strip, cancel, one box for everything that went wrong
+# ---------------------------------------------------------------------------
+
+class _SlowArchive:
+    """A stand-in reader that stays inside one file until it is let go.
+
+    It reports the way the real readers do, so the strip has something to show,
+    and it only stops when the job asks whether it may carry on: that is what a
+    Cancel press has to interrupt.
+    """
+
+    def __init__(self):
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def extract(self, dest, task=None):
+        task.plan(100)
+        task.starting("config.chump")
+        task.work(40)
+        self.entered.set()
+        while not self.release.wait(0.02):
+            if not task.should_continue():
+                raise Cancelled()  # stopped inside one member, as the real ones are
+        if not task.should_continue():
+            raise Cancelled()  # a request that came in while waiting still wins
+
+
+def _start_in_a_thread(self, *args, **kwargs):
+    """The real thread start, which is what the window uses outside these tests."""
+    super(gui._ArchiveJob, self).start(*args, **kwargs)
+
+
+def _in_a_real_thread(monkeypatch):
+    """Give one test back the worker thread the autouse fixture parks."""
+    monkeypatch.setattr(gui._ArchiveJob, "start", _start_in_a_thread)
+
+
+def wait_until(qapp, predicate, timeout=10.0):
+    """Spin the event loop until ``predicate`` holds; reports arrive as events."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        qapp.processEvents()
+        if time.monotonic() > deadline:
+            pytest.fail("the job never reported what the test was waiting for")
+
+
+def test_the_progress_strip_is_out_of_the_way_until_a_job_runs(window):
+    assert not window.job_panel.isVisibleTo(window)
+    assert window.progress.maximum() == 1 and window.progress.value() == 0
+    assert window.btn_cancel.text() == "Cancel"
+
+
+def test_a_running_job_fills_the_strip_and_keeps_hold_of_the_queue(
+    window, qapp, dialogs, monkeypatch
+):
+    """The bar is sized for the job, names the file, and nothing else works."""
+    slow = _SlowArchive()
+    _in_a_real_thread(monkeypatch)
+    window.load_paths([str(FOLDER_ARCHIVE)])
+    monkeypatch.setattr(gui, "open_archive", lambda path: slow)  # after the listing
+    window.on_extract()
+    assert slow.entered.wait(5)
+
+    wait_until(qapp, lambda: window.progress.value() == 40)
+    assert window.job_panel.isVisibleTo(window)
+    assert window.progress.maximum() == 100
+    assert "Extracting" in window.progress_name.text()
+    assert "config.chump" in window.progress_name.toolTip()
+    for button in (window.btn_extract, window.btn_extract_to, window.btn_clear):
+        assert not button.isEnabled()
+    queued = list(window.extract_files)
+    window.on_clear()  # the queue belongs to the job while it runs
+    assert window.extract_files == queued
+
+    window.btn_cancel.click()
+    assert not window.btn_cancel.isEnabled()  # one press is enough
+    slow.release.set()
+    wait_until(qapp, lambda: window._job is None)
+
+    assert not window.job_panel.isVisibleTo(window)
+    assert window.btn_extract.isEnabled() and window.btn_clear.isEnabled()
+    assert window.progress.value() == 0  # cleaned up, not left at the last run
+    assert dialogs[-1][1].startswith("Cancelled")
+
+
+def test_a_whole_run_reports_its_failures_in_one_box(window, dialogs, tmp_path):
+    broken = tmp_path / "one.tzarc"
+    also = tmp_path / "two.tzarc"
+    broken.write_bytes(b"not an archive")
+    also.write_bytes(b"also not an archive")
+    window.load_paths([str(broken), str(also)])
+    listing = len([1 for kind, _ in dialogs if kind == "error"])
+
+    window.on_extract()
+
+    errors = [text for kind, text in dialogs if kind == "error"]
+    assert len(errors) == listing + 1  # the run itself only says it once
+    assert str(broken) in errors[-1] and str(also) in errors[-1]
+    assert dialogs[-1] == ("info", "Finished extracting files")
+
+
+def test_closing_the_window_stops_a_running_job_instead_of_leaving_it(
+    window, qapp, monkeypatch
+):
+    """Closing asks first, and no thread is left writing files when it agrees."""
+    slow = _SlowArchive()
+    _in_a_real_thread(monkeypatch)
+    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: next(answers)))
+    window.load_paths([str(FOLDER_ARCHIVE)])
+    monkeypatch.setattr(gui, "open_archive", lambda path: slow)  # after the listing
+    window.on_extract()
+    assert slow.entered.wait(5)
+
+    closing = QCloseEvent()
+    window.closeEvent(closing)
+    assert not closing.isAccepted()  # "keep working" is respected
+    assert window._job is not None and not window._job.isFinished()
+
+    closing = QCloseEvent()
+    window.closeEvent(closing)
+    assert closing.isAccepted()
+    assert window._job.isFinished()  # the thread was waited for, not abandoned

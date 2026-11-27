@@ -14,6 +14,10 @@ letter by letter, every list row whose name misses the typed text, keeping
 matching entries and their parents.
 The compressed v2 checkbox belongs to the Create tab only and keeps
 its state from one run to the next.
+Extracting and creating happen on a background thread, so a built-in archive
+of a gigabyte never leaves the window unresponsive: while a job runs, a strip
+under the buttons names the file being written, shows a progress bar for it and
+offers Cancel, and the queue itself is out of reach until the job ends.
 """
 
 from __future__ import annotations
@@ -21,10 +25,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -35,6 +41,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QTabWidget,
     QTreeWidget,
@@ -44,8 +51,8 @@ from PyQt6.QtWidgets import (
 )
 
 from . import __version__
-from .archive import ArchiveError, default_extract_dir, open_archive
-from .tzarc import V1, V2, TzarcError, create_archive
+from .archive import ArchiveError, ArchiveTask, Cancelled, default_extract_dir, open_archive
+from .tzarc import V1, V2, create_archive
 
 __all__ = ["TzarcWindow", "run_gui"]
 
@@ -63,6 +70,9 @@ EXTRACT_TAB, CREATE_TAB = 0, 1
 ARCHIVE_ENTRY, FOLDER_ENTRY, FILE_ENTRY = "archive", "folder", "file"
 # the create tree's top-level rows are queued folders on disk
 QUEUED_FOLDER_ENTRY = "queued folder"
+
+# the two kinds of work the background job does
+EXTRACT_OP, CREATE_OP = "extract", "create"
 
 # what the GUI carries over from one run to the next, and where it keeps it
 SETTINGS_APP = "TZarchiver"
@@ -144,6 +154,133 @@ def _save_settings(values: dict) -> None:
         pass  # a read-only or full profile must not stop the app
 
 
+@dataclass(frozen=True)
+class _Operation:
+    """One queued item, settled into what the background job has to do.
+
+    Everything here was decided on the GUI thread - destination picked,
+    overwrite question answered - so the job never needs the window.  ``path``
+    is the archive to unpack or the folder to archive and ``target`` the file
+    or folder that gets written; ``dest`` and ``value`` only matter when one
+    folder or file inside an archive was asked for.
+    """
+
+    mode: str  # EXTRACT_OP or CREATE_OP
+    path: str
+    kind: str  # ARCHIVE_ENTRY, FOLDER_ENTRY, FILE_ENTRY or QUEUED_FOLDER_ENTRY
+    value: str
+    dest: str
+    target: str
+    version: int = V1
+
+
+class _ArchiveJob(QThread, ArchiveTask):
+    """The extract/create work of one button press, off the GUI thread.
+
+    Everything slow happens in this thread - opening an archive, expanding its
+    compressed members, writing files, packing a folder - which is what keeps
+    the window answering the desktop while a gigabyte of built-in content is
+    being unpacked.  Only plain values travel back, as signals: the size of
+    the stretch being worked on, how many bytes of it are done, and what went
+    wrong.  Questions (which folder, overwrite?) were settled before the
+    thread started, so it never touches a widget.
+
+    Being the ArchiveTask its own work reports through keeps both halves of
+    the reporting together.  The counts are taken in the worker thread, so
+    they can only be handed over as a signal, and only when the bar would
+    visibly move; the cancel request is Qt's own interruption flag, asked
+    before every file and every block handed to the disk.
+    """
+
+    #: what is being worked on and how many bytes that stretch is worth
+    phase = pyqtSignal(str, int)
+    #: bytes done so far, and the file being worked on right now
+    step = pyqtSignal(int, str)
+    #: the source that could not be handled, and why
+    trouble = pyqtSignal(str, str)
+    #: the work is over, whether it finished, failed or was cancelled
+    ended = pyqtSignal()
+
+    #: shortest gap between two progress signals: often enough to watch a bar
+    #: fill, rare enough that a block loop cannot bury the event queue
+    TICK_MS = 100
+
+    def __init__(self, operations: list, summary: str) -> None:
+        super().__init__()
+        self.operations = operations
+        #: what the window says when everything went through
+        self.summary = summary
+        self.total = 0
+        self.done = 0
+        self.current = ""
+        self.label = ""
+        self.cancelled = False
+        self._stamp = 0.0
+        self._reported = True
+
+    # -- the work ---------------------------------------------------------
+    def run(self) -> None:
+        """Go through the queue, then tell the window it may have its buttons back."""
+        try:
+            for op in self.operations:
+                if self.isInterruptionRequested():
+                    self.cancelled = True
+                    break
+                try:
+                    self._run(op)
+                except Cancelled:
+                    self.cancelled = True
+                    break
+                except (ArchiveError, OSError) as exc:
+                    self.trouble.emit(op.path, str(exc))
+        finally:
+            self.ended.emit()
+
+    def _run(self, op: _Operation) -> None:
+        """One queued item: the archive call that does it passes itself as the task."""
+        self.current = ""
+        if op.mode == CREATE_OP:
+            self.label = f"Creating {Path(op.target).name}"
+            archive = create_archive(op.path, version=op.version, task=self)
+            archive.write(op.target, version=op.version, task=self)
+            return
+        archive = open_archive(op.path)
+        name = Path(op.path).name
+        if op.kind == FOLDER_ENTRY:
+            self.label = f"Extracting folder {op.value} from {name}"
+            archive.extract_folder(op.value, op.dest, self)
+        elif op.kind == FILE_ENTRY:
+            self.label = f"Extracting {op.value} from {name}"
+            archive.extract_entry(op.value, op.dest, self)
+        else:
+            self.label = f"Extracting {name}"
+            archive.extract(op.target, self)
+
+    # -- reporting (this is the ArchiveTask the work above reports through) --
+    def plan(self, total: int) -> None:
+        self.total = total
+        self.done = 0
+        self._stamp = time.monotonic()
+        self._reported = False
+        self.phase.emit(self.label, total)
+
+    def starting(self, name: str) -> None:
+        self.current = name
+
+    def work(self, count: int) -> None:
+        """Count the bytes, and move the bar often enough to watch, not constantly."""
+        self.done += count
+        now = time.monotonic()
+        first = not self._reported  # the first bytes of a stretch always show
+        if first or self.done >= self.total or (now - self._stamp) * 1000 >= self.TICK_MS:
+            self._reported = True
+            self._stamp = now
+            self.step.emit(self.done, self.current)
+
+    def should_continue(self) -> bool:
+        return not self.isInterruptionRequested()
+
+
 class TzarcWindow(QWidget):
     def __init__(self, paths: list[str] | None = None) -> None:
         super().__init__()
@@ -151,6 +288,12 @@ class TzarcWindow(QWidget):
         self.create_dirs: list[str] = []
         self._seen_files: set[str] = set()
         self._seen_dirs: set[str] = set()
+        #: the job currently running in its own thread, None when idle
+        self._job: _ArchiveJob | None = None
+        #: what went wrong during the running job, told about once it is over
+        self._job_trouble: list[str] = []
+        #: the strip's left-hand text, kept so each update can add the file name
+        self._job_label = ""
         self._build()
         self.setAcceptDrops(True)
         if paths:
@@ -218,6 +361,27 @@ class TzarcWindow(QWidget):
         actions.addStretch(1)
         actions.addWidget(self.btn_clear)
         outer.addLayout(actions)
+
+        # while a job runs: the file being worked on, a bar for it and a way out
+        self.job_panel = QWidget()
+        panel = QVBoxLayout(self.job_panel)
+        panel.setContentsMargins(0, 0, 0, 0)
+        panel.setSpacing(3)
+        self.progress_name = QLabel("")
+        panel.addWidget(self.progress_name)
+        bar_row = QHBoxLayout()
+        bar_row.setSpacing(4)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        bar_row.addWidget(self.progress, 1)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setMinimumSize(width, 23)
+        self.btn_cancel.clicked.connect(self.on_cancel)
+        bar_row.addWidget(self.btn_cancel)
+        panel.addLayout(bar_row)
+        self.job_panel.setVisible(False)
+        outer.addWidget(self.job_panel)
 
         footer = QHBoxLayout()
         footer.addWidget(QLabel("\u00a9 2026 SilverGreen93"))
@@ -317,11 +481,16 @@ class TzarcWindow(QWidget):
         self.btn_create_in.setVisible(index == CREATE_TAB)
 
     def _update_buttons(self) -> None:
-        """Keep the action buttons in step with the two queues."""
-        self.btn_extract.setEnabled(bool(self.extract_files))
-        self.btn_extract_to.setEnabled(bool(self.extract_files))
-        self.btn_create.setEnabled(bool(self.create_dirs))
-        self.btn_create_in.setEnabled(bool(self.create_dirs))
+        """Keep the action buttons in step with the two queues.
+
+        While a job runs the queues cannot be worked on twice, so every action
+        button is off regardless of what is queued.
+        """
+        busy = self._job is not None
+        self.btn_extract.setEnabled(bool(self.extract_files) and not busy)
+        self.btn_extract_to.setEnabled(bool(self.extract_files) and not busy)
+        self.btn_create.setEnabled(bool(self.create_dirs) and not busy)
+        self.btn_create_in.setEnabled(bool(self.create_dirs) and not busy)
 
     # -- queue ------------------------------------------------------------------
     def load_paths(self, paths: list[str]) -> None:
@@ -424,10 +593,14 @@ class TzarcWindow(QWidget):
         """Unpack every queued archive into ``dest``, or beside itself when None.
 
         Extraction folders that already exist get an overwrite question first;
-        Cancel stops the whole run.
+        Cancel stops the whole run.  Whatever survives the questions is handed
+        to the background job.
         """
+        if self._job is not None:
+            return  # a job is already writing: the buttons are off, but be safe
         multiple = len(self.extract_files) > 1
         mode = "ask"
+        operations = []
         for path in self.extract_files:
             if not Path(path).is_file():
                 continue
@@ -440,17 +613,98 @@ class TzarcWindow(QWidget):
                     mode = choice
                 if choice in ("no", "none"):
                     continue
-            try:
-                archive = open_archive(path)
-                archive.extract(target)
-            except (ArchiveError, OSError) as exc:
-                self._error(exc, path)
-                continue
-        self._info("Finished extracting files")
+            operations.append(_Operation(EXTRACT_OP, path, ARCHIVE_ENTRY, "", "", str(target)))
+        self._start_job(operations, "Finished extracting files")
+
+    # -- the job in progress ----------------------------------------------------
+    def _start_job(self, operations: list, summary: str) -> None:
+        """Hand the settled work to its own thread and start following it.
+
+        ``summary`` is what the window says once everything went through.
+        """
+        self._job_trouble = []
+        self._job_label = ""
+        job = _ArchiveJob(operations, summary)
+        job.phase.connect(self._on_phase)
+        job.step.connect(self._on_step)
+        job.trouble.connect(self._on_trouble)
+        job.ended.connect(self._on_job_ended)
+        self._job = job
+        self.job_panel.setVisible(True)
+        self.btn_cancel.setEnabled(True)
+        self.btn_clear.setEnabled(False)
+        self._update_buttons()
+        job.start()
+
+    def on_cancel(self) -> None:
+        """Ask the running job to stop: at the next file or block written.
+
+        The files it already wrote are left where they are, as they are when an
+        archive turns out to be damaged part way through.
+        """
+        if self._job is not None:
+            self._job.requestInterruption()
+            self.btn_cancel.setEnabled(False)  # one press is enough
+
+    def _on_phase(self, label: str, total: int) -> None:
+        """A new stretch of work: the bar learns its size, the strip its words."""
+        self._job_label = label
+        self.progress_name.setText(label)
+        self.progress_name.setToolTip(label)
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(0)
+
+    def _on_step(self, done: int, name: str) -> None:
+        """More bytes are down: move the bar and name the file they came from."""
+        self.progress.setValue(min(done, self.progress.maximum()))
+        line = f"{self._job_label}  -  {name}" if name else self._job_label
+        self.progress_name.setToolTip(line)
+        self.progress_name.setText(self._elided(line))
+
+    def _elided(self, text: str) -> str:
+        """Shorten ``text`` to what fits the strip, keeping both ends of it."""
+        width = self.progress_name.width()
+        if width <= 0:
+            return text
+        return self.progress_name.fontMetrics().elidedText(text, Qt.TextElideMode.ElideMiddle, width)
+
+    def _on_trouble(self, path: str, message: str) -> None:
+        """Remember one failure.
+
+        Showing it here would put a modal box in front of a job that is still
+        running, so everything waits for the end of the run.
+        """
+        self._job_trouble.append(f"{path}\n{message}")
+
+    def _on_job_ended(self) -> None:
+        """The thread is done: put the window back and say what happened."""
+        job, trouble = self._job, self._job_trouble
+        self._job = None
+        self.job_panel.setVisible(False)
+        self.progress_name.setText("")
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.btn_clear.setEnabled(True)
+        self._update_buttons()
+        if trouble:
+            self._report_trouble(trouble)
+        if job is not None and job.cancelled:
+            self._info("Cancelled - what was already written is kept")
+        elif job is not None:
+            self._info(job.summary)
+
+    def _report_trouble(self, trouble: list) -> None:
+        """One box for everything that went wrong during the job."""
+        shown = trouble[:5]
+        rest = len(trouble) - len(shown)
+        text = "\n\n".join(shown) + (f"\n\nand {rest} more" if rest else "")
+        QMessageBox.critical(self, "Error", text)
 
     def _show_extract_menu(self, pos) -> None:
         """Right-click menu for the extract tree: Extract to... on any entry,
         Remove on the queued archive rows."""
+        if self._job is not None:
+            return  # the queue waits for the running job
         item = self.tv_extract.itemAt(pos)
         if item is None or not item.data(0, Qt.ItemDataRole.UserRole):
             return  # empty space or the drag hint: nothing to do here
@@ -488,18 +742,10 @@ class TzarcWindow(QWidget):
             target = Path(dest) / value.replace("\\", "/").split("/")[-1]
         if target.exists() and self._ask_overwrite(target) != QMessageBox.StandardButton.Yes:
             return
-        try:
-            archive = open_archive(archive_path)
-            if kind == ARCHIVE_ENTRY:
-                archive.extract(target)
-            elif kind == FOLDER_ENTRY:
-                archive.extract_folder(value, dest)
-            else:
-                archive.extract_entry(value, dest)
-        except (ArchiveError, OSError) as exc:
-            self._error(exc, archive_path)
-            return
-        self._info(f"Finished extracting from {Path(archive_path).name}")
+        self._start_job(
+            [_Operation(EXTRACT_OP, archive_path, kind, value, str(dest), str(target))],
+            f"Finished extracting from {Path(archive_path).name}",
+        )
 
     def _ask_overwrite(self, target: Path, multiple: bool = False):
         """Ask whether ``target``, which already exists, may be overwritten.
@@ -560,11 +806,14 @@ class TzarcWindow(QWidget):
 
         The compressed v2 checkbox switches the output to version 2; archives
         that already exist get an overwrite question first, and Cancel stops
-        the whole run.
+        the whole run.  What survives goes to the background job.
         """
+        if self._job is not None:
+            return  # a job is already writing: the buttons are off, but be safe
         version = V2 if self.chk_v2.isChecked() else V1
         multiple = len(self.create_dirs) > 1
         mode = "ask"
+        operations = []
         for path in self.create_dirs:
             target = (
                 Path(str(path) + ".tzarc")
@@ -579,13 +828,10 @@ class TzarcWindow(QWidget):
                     mode = choice
                 if choice in ("no", "none"):
                     continue
-            try:
-                archive = create_archive(path, version=version)
-                archive.write(target, version=version)
-            except (TzarcError, OSError) as exc:
-                self._error(exc, path)
-                continue
-        self._info("Finished creating archives")
+            operations.append(
+                _Operation(CREATE_OP, path, QUEUED_FOLDER_ENTRY, "", "", str(target), version)
+            )
+        self._start_job(operations, "Finished creating archives")
 
     def _show_create_menu(self, pos) -> None:
         """Right-click menu for the create tree: Create in... and Remove, on
@@ -594,6 +840,8 @@ class TzarcWindow(QWidget):
         Only the top-level folder rows get the menu; the folder and file rows
         below them are not archives waiting to be created on their own.
         """
+        if self._job is not None:
+            return  # the queue waits for the running job
         item = self.tv_create.itemAt(pos)
         if item is None or item.parent() is not None or not item.data(0, Qt.ItemDataRole.UserRole):
             return  # empty space, the drag hint or a contents row: no menu
@@ -620,13 +868,10 @@ class TzarcWindow(QWidget):
         if target.exists() and self._ask_overwrite(target) != QMessageBox.StandardButton.Yes:
             return
         version = V2 if self.chk_v2.isChecked() else V1
-        try:
-            archive = create_archive(folder_path, version=version)
-            archive.write(target, version=version)
-        except (TzarcError, OSError) as exc:
-            self._error(exc, folder_path)
-            return
-        self._info(f"Finished creating archive for {Path(folder_path).name}")
+        self._start_job(
+            [_Operation(CREATE_OP, folder_path, QUEUED_FOLDER_ENTRY, "", "", str(target), version)],
+            f"Finished creating archive for {Path(folder_path).name}",
+        )
 
     def on_remove_extract(self, item: QTreeWidgetItem) -> None:
         """Take the right-clicked tzarc out of the extract queue."""
@@ -654,6 +899,8 @@ class TzarcWindow(QWidget):
 
     def on_clear(self) -> None:
         """Empty the list of the tab on screen and show its hint again."""
+        if self._job is not None:
+            return  # the queue waits for the running job
         if self.tabs.currentIndex() == CREATE_TAB:
             self.create_dirs.clear()
             self._seen_dirs.clear()
@@ -684,6 +931,8 @@ class TzarcWindow(QWidget):
 
     # -- drag and drop --------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._job is not None:
+            return  # a running job has the queues to itself
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
@@ -691,6 +940,30 @@ class TzarcWindow(QWidget):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
         if paths:
             self.load_paths(paths)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Closing while a job runs asks first: no thread is left writing files.
+
+        Waiting for the job is safe because it notices the request before its
+        next file or block, which is at most one member of the archive away.
+        """
+        job = self._job
+        if job is None:
+            event.accept()
+            return
+        answer = QMessageBox.question(
+            self,
+            "Still working",
+            "An operation is still running.\nStop it and quit?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            event.ignore()
+            return
+        job.requestInterruption()
+        job.wait(30000)
+        event.accept()
 
     # -- messages -------------------------------------------------------------
     def _error(self, exc: Exception, path: str) -> None:

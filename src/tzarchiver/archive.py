@@ -19,7 +19,10 @@ from typing import BinaryIO
 __all__ = [
     "ArchiveError",
     "ArchiveBase",
+    "ArchiveTask",
+    "Cancelled",
     "Entry",
+    "ReportingFile",
     "open_archive",
     "default_extract_dir",
     "safe_join",
@@ -84,6 +87,83 @@ def open_archive(path: str | Path) -> ArchiveBase:
     raise ArchiveError(f"File format not supported for {path}")
 
 
+class Cancelled(Exception):
+    """Raised when a running job's task asks it to stop part way through.
+
+    Whatever was written by then stays on the disk, exactly as it does when an
+    archive turns out to be damaged halfway through.
+    """
+
+
+class ArchiveTask:
+    """How a running archive job reports itself and hears about cancellation.
+
+    A caller that wants to follow the work - the GUI's progress bar - hands one
+    of these to :meth:`ArchiveBase.extract`, :meth:`extract_entry`,
+    :meth:`extract_folder`, ``tzarc.create_archive`` and ``tzarc.Archive.write``:
+
+    * ``plan`` says how many bytes this stretch of work is worth, so the bar
+      can be sized before any of it happens;
+    * ``starting`` names the file being worked on right now;
+    * ``work`` counts the bytes as they are read or written;
+    * ``should_continue`` is asked before every file and before every block is
+      handed to the disk, so a cancel lands inside a single huge member and
+      not only between files.
+
+    Everything here does nothing and every archive method takes ``None`` (the
+    default) to mean "nobody is watching", which behaves as it always did.
+    """
+
+    def plan(self, total: int) -> None:
+        """This many bytes of work lie ahead."""
+
+    def starting(self, name: str) -> None:
+        """The job is working on this file now."""
+
+    def work(self, count: int) -> None:
+        """This many bytes have just been read or written."""
+
+    def should_continue(self) -> bool:
+        """False stops the job, raising :class:`Cancelled`."""
+        return True
+
+    @staticmethod
+    def check(task: "ArchiveTask | None") -> None:
+        """Stop the job if ``task`` asks for that; ``None`` keeps it going."""
+        if task is not None and not task.should_continue():
+            raise Cancelled()
+
+
+class ReportingFile:
+    """A file object that reports every block it is given to a task.
+
+    The archive writers only ever call ``write``, so wrapping the real file
+    like this is enough to follow any format's extraction - including one that
+    streams a member out in blocks - without the format knowing the difference.
+    """
+
+    #: how much goes to the disk at a time while a task is watching: big enough
+    #: to stay fast, small enough to be worth checking against a cancel request
+    BLOCK = 256 * 1024
+
+    def __init__(self, target: BinaryIO, task: ArchiveTask) -> None:
+        self._target = target
+        self._task = task
+
+    def write(self, data: bytes) -> None:
+        """Hand ``data`` to the real file, one block at a time.
+
+        The block split is what lets a cancel land inside a member that is
+        hundreds of megabytes long: a format that hands over the whole file in
+        one call still gets asked before every piece of it goes to the disk.
+        """
+        for start in range(0, len(data), self.BLOCK):
+            ArchiveTask.check(self._task)
+            block = data[start : start + self.BLOCK]
+            self._target.write(block)
+            self._task.work(len(block))
+
+
 class ArchiveBase:
     """The listing and extracting behaviour every format has in common.
 
@@ -131,39 +211,47 @@ class ArchiveBase:
         raise NotImplementedError
 
     # -- extracting -------------------------------------------------------
-    def extract(self, dest_dir: str | Path | None = None) -> Path:
+    def extract(self, dest_dir: str | Path | None = None, task: ArchiveTask | None = None) -> Path:
         """Write every file below ``dest_dir``, creating subfolders as needed.
 
         Forward slashes in entry names become real directories.  ``dest_dir``
         is required: :func:`default_extract_dir` supplies the name the original
-        apps used.
+        apps used.  ``task``, when given, is told how big the job is before it
+        starts and then hears about every file and every block written.
         """
         if dest_dir is None:
             raise self.error("extract() needs a destination directory")
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
+        if task is not None:
+            task.plan(sum(entry.size for entry in self.entries))
         for entry in self.entries:
+            ArchiveTask.check(task)  # asked before the file is opened: no empty leftovers
             target = self._safe_join(dest, entry.name)
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("wb") as handle:
-                self.write_contents(entry.name, handle)
+                self._write_one(entry, handle, task)
         return dest
 
-    def extract_entry(self, name: str, dest_dir: str | Path) -> Path:
+    def extract_entry(self, name: str, dest_dir: str | Path, task: ArchiveTask | None = None) -> Path:
         """Write the single file ``name`` into ``dest_dir``, by its own name.
 
         The folders the entry sits in inside the archive are not recreated:
         the chosen destination becomes the file's folder.
         """
         dest = Path(dest_dir)
-        dest.mkdir(parents=True, exist_ok=True)
         base = name.replace("\\", "/").split("/")[-1]
+        entry = next((item for item in self.entries if item.name == name), Entry(name, 0))
+        ArchiveTask.check(task)  # asked before anything is created
+        dest.mkdir(parents=True, exist_ok=True)
         target = self._safe_join(dest, base)
+        if task is not None:
+            task.plan(entry.size)
         with target.open("wb") as handle:
-            self.write_contents(name, handle)
+            self._write_one(entry, handle, task)
         return target
 
-    def extract_folder(self, prefix: str, dest_dir: str | Path) -> Path:
+    def extract_folder(self, prefix: str, dest_dir: str | Path, task: ArchiveTask | None = None) -> Path:
         """Write every file below the folder ``prefix`` into ``dest_dir``.
 
         The folder itself is recreated inside ``dest_dir`` under its own name
@@ -171,20 +259,33 @@ class ArchiveBase:
         """
         prefix = prefix.replace("\\", "/").strip("/")
         start = prefix + "/"
+        wanted = [entry for entry in self.entries if entry.name.replace("\\", "/").startswith(start)]
+        if not wanted:
+            raise self.error(f"folder {prefix} is not in this archive")
         dest = Path(dest_dir) / Path(prefix).name
         dest.mkdir(parents=True, exist_ok=True)
-        written = 0
-        for entry in self.entries:
-            if not entry.name.replace("\\", "/").startswith(start):
-                continue
+        if task is not None:
+            task.plan(sum(entry.size for entry in wanted))
+        for entry in wanted:
+            ArchiveTask.check(task)  # asked before the file is opened: no empty leftovers
             target = self._safe_join(dest, entry.name[len(start) :])
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("wb") as handle:
-                self.write_contents(entry.name, handle)
-            written += 1
-        if written == 0:
-            raise self.error(f"folder {prefix} is not in this archive")
+                self._write_one(entry, handle, task)
         return dest
+
+    def _write_one(self, entry: Entry, handle: BinaryIO, task: ArchiveTask | None) -> None:
+        """Copy ``entry`` into the open ``handle``, reporting to ``task``.
+
+        The caller has already asked whether the job may carry on, which is why
+        the check happens before the file is opened rather than here: a job
+        stopped at this point should not leave an empty file behind.
+        """
+        if task is None:
+            self.write_contents(entry.name, handle)
+            return
+        task.starting(entry.name)
+        self.write_contents(entry.name, ReportingFile(handle, task))
 
     def _safe_join(self, dest: Path, name: str) -> Path:
         """:func:`safe_join` reporting through this format's error type."""

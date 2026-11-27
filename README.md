@@ -18,6 +18,12 @@ command line) and it lists and extracts like a tzarc, folder structure and all,
 but creating a `.ja` is not offered - writing one needs the Jet Archiver's
 byte pair encoder, and Trainz reads plain `.tzarc` files just as well.
 
+Extracting and creating happen on their own thread, so a large archive never
+leaves the window unresponsive. While a job runs, a progress bar names the file
+being written and **Cancel** stops it - at the next file or the next block of a
+large one, keeping whatever was already written - and anything that went wrong
+is reported once the run is over.
+
 ## Getting Started
 
 From a terminal:
