@@ -244,6 +244,13 @@ class TzarcWindow(QWidget):
     def _make_tree(placeholder: str) -> QTreeWidget:
         tree = QTreeWidget()
         tree.setHeaderHidden(True)
+        # Qt asks its style how much room a level needs and that answer is wide
+        # for this window: measured 20 px under the windowsvista and fusion
+        # styles, 30 px under windows11.  Halving it (before anything else
+        # measures the tree, since a style cannot change the room afterwards)
+        # keeps deep archive paths on screen and still leaves room for the
+        # branch mark, the smallest halved answer measured being 10 px.
+        tree.setIndentation(tree.indentation() // 2)
         TzarcWindow._reset_placeholder(tree, placeholder)
         return tree
 

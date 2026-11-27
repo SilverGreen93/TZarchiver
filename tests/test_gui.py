@@ -18,7 +18,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PyQt6.QtWidgets")
 
 from PyQt6.QtCore import QPoint, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMenu, QMessageBox  # noqa: E402
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QTreeWidget,
+)
 
 from tzarchiver import gui  # noqa: E402
 from tzarchiver.gui import (  # noqa: E402
@@ -102,6 +109,14 @@ def test_two_tabs_host_the_two_queues(window):
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["Extract", "Create"]
     assert window.tabs.widget(EXTRACT_TAB) is window.tv_extract
     assert window.tabs.widget(CREATE_TAB).isAncestorOf(window.tv_create)
+
+
+def test_the_trees_indent_by_half_of_what_qt_asks_for(window):
+    """Qt's style answer (20 or 30 px) is wide here, so both trees halve it."""
+    default = QTreeWidget().indentation()
+    assert default // 2 >= 10  # still room for the branch mark
+    assert window.tv_extract.indentation() == default // 2
+    assert window.tv_create.indentation() == default // 2
 
 
 def test_v2_checkbox_lives_on_the_create_tab_only(window):
