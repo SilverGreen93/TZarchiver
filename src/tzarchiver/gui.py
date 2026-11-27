@@ -3,7 +3,7 @@
 A resizable portrait window with a tabbed queue: the Extract tab lists the
 tzarc files dropped on the window and the Create tab the folders to archive,
 each expanded into a real folder/file tree.  The Extract all / Extract all
-to... and Create all / Create all to... buttons for the current tab and Clear
+to... and Create all / Create all in... buttons for the current tab and Clear
 list sit below the tabs.  Right-clicking any entry in the Extract tree offers
 "Extract to...", which unpacks that one file, folder or whole archive into a
 chosen destination;
@@ -211,16 +211,16 @@ class TzarcWindow(QWidget):
         self.btn_extract = QPushButton("Extract all")
         self.btn_extract_to = QPushButton("Extract all to...")
         self.btn_create = QPushButton("Create all")
-        self.btn_create_to = QPushButton("Create all to...")
+        self.btn_create_in = QPushButton("Create all in...")
         self.btn_clear = QPushButton("Clear list")
-        buttons = (self.btn_extract, self.btn_extract_to, self.btn_create, self.btn_create_to, self.btn_clear)
+        buttons = (self.btn_extract, self.btn_extract_to, self.btn_create, self.btn_create_in, self.btn_clear)
         width = max(button.sizeHint().width() for button in buttons)
         for button in buttons:
             button.setMinimumSize(width, 23)
         actions.addWidget(self.btn_extract)
         actions.addWidget(self.btn_extract_to)
         actions.addWidget(self.btn_create)
-        actions.addWidget(self.btn_create_to)
+        actions.addWidget(self.btn_create_in)
         actions.addStretch(1)
         actions.addWidget(self.btn_clear)
         outer.addLayout(actions)
@@ -238,7 +238,7 @@ class TzarcWindow(QWidget):
         self.btn_extract.clicked.connect(self.on_extract)
         self.btn_extract_to.clicked.connect(self.on_extract_all_to)
         self.btn_create.clicked.connect(self.on_create)
-        self.btn_create_to.clicked.connect(self.on_create_all_to)
+        self.btn_create_in.clicked.connect(self.on_create_all_in)
         self.btn_clear.clicked.connect(self.on_clear)
 
         self._on_tab_changed(self.tabs.currentIndex())
@@ -313,14 +313,14 @@ class TzarcWindow(QWidget):
         self.btn_extract.setVisible(index == EXTRACT_TAB)
         self.btn_extract_to.setVisible(index == EXTRACT_TAB)
         self.btn_create.setVisible(index == CREATE_TAB)
-        self.btn_create_to.setVisible(index == CREATE_TAB)
+        self.btn_create_in.setVisible(index == CREATE_TAB)
 
     def _update_buttons(self) -> None:
         """Keep the action buttons in step with the two queues."""
         self.btn_extract.setEnabled(bool(self.extract_files))
         self.btn_extract_to.setEnabled(bool(self.extract_files))
         self.btn_create.setEnabled(bool(self.create_dirs))
-        self.btn_create_to.setEnabled(bool(self.create_dirs))
+        self.btn_create_in.setEnabled(bool(self.create_dirs))
 
     # -- queue ------------------------------------------------------------------
     def load_paths(self, paths: list[str]) -> None:
@@ -547,9 +547,9 @@ class TzarcWindow(QWidget):
         """Archive every queued folder beside itself, as the Create all button does."""
         self._create_queue(None)
 
-    def on_create_all_to(self) -> None:
+    def on_create_all_in(self) -> None:
         """Archive every queued folder into a destination folder the user picks."""
-        dest = QFileDialog.getExistingDirectory(self, "Create all to...")
+        dest = QFileDialog.getExistingDirectory(self, "Create all in...")
         if not dest:
             return  # dialog cancelled: leave everything alone
         self._create_queue(Path(dest))

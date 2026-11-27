@@ -111,7 +111,7 @@ def test_v2_checkbox_lives_on_the_create_tab_only(window):
 
 def test_the_current_tabs_buttons_are_the_ones_shown(window):
     extract = (window.btn_extract, window.btn_extract_to)
-    create = (window.btn_create, window.btn_create_to)
+    create = (window.btn_create, window.btn_create_in)
     for button in extract:
         assert button.isVisibleTo(window)
     for button in create:
@@ -124,7 +124,7 @@ def test_the_current_tabs_buttons_are_the_ones_shown(window):
 
 
 def test_action_buttons_share_one_width_and_a_short_height(window):
-    buttons = (window.btn_extract, window.btn_extract_to, window.btn_create, window.btn_create_to, window.btn_clear)
+    buttons = (window.btn_extract, window.btn_extract_to, window.btn_create, window.btn_create_in, window.btn_clear)
     sizes = {b.minimumSize() for b in buttons}
     assert len(sizes) == 1
     assert next(iter(sizes)).height() == 23
@@ -134,7 +134,7 @@ def test_action_buttons_follow_their_queue(window):
     assert not window.btn_extract.isEnabled()
     assert not window.btn_extract_to.isEnabled()
     assert not window.btn_create.isEnabled()
-    assert not window.btn_create_to.isEnabled()
+    assert not window.btn_create_in.isEnabled()
     window.load_paths([str(FOLDER_ARCHIVE)])
     assert window.btn_extract.isEnabled()
     assert window.btn_extract_to.isEnabled()
@@ -642,7 +642,7 @@ def test_create_all_yes_to_all_replaces_every_existing_archive(window, dialogs, 
 
 
 # ---------------------------------------------------------------------------
-# Extract all to... / Create all to... buttons
+# Extract all to... / Create all in... buttons
 # ---------------------------------------------------------------------------
 
 def test_extract_all_to_unpacks_every_archive_into_the_chosen_folder(window, dialogs, monkeypatch, tmp_path):
@@ -704,7 +704,7 @@ def test_create_all_to_archives_every_folder_into_the_chosen_folder(window, dial
     dest = tmp_path / "out"
     dest.mkdir()
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
-    window.on_create_all_to()
+    window.on_create_all_in()
     for name in ("one", "two"):
         made = read_archive(dest / f"{name}.tzarc")
         assert made.names() == ["config.chump", "folder/fisier.txt"]
@@ -721,7 +721,7 @@ def test_create_all_to_honors_the_v2_checkbox(window, dialogs, monkeypatch, tmp_
     dest = tmp_path / "out"
     dest.mkdir()
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
-    window.on_create_all_to()
+    window.on_create_all_in()
     assert read_archive(dest / "one.tzarc").version == V2
 
 
@@ -730,7 +730,7 @@ def test_create_all_to_does_nothing_when_the_dialog_is_cancelled(window, dialogs
     shutil.copytree(FOLDER, one)
     window.load_paths([str(one)])
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
-    window.on_create_all_to()
+    window.on_create_all_in()
     assert not (tmp_path / "one.tzarc").exists()
     assert dialogs == []
 
