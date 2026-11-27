@@ -300,6 +300,33 @@ def _copy_archive(tmp_path):
     return archive
 
 
+def _right_click(window, tree, item, monkeypatch, click=None):
+    """Right-click the row of ``item`` and report the menu actions it showed.
+
+    ``click`` names the action to pick, if any; a click runs that action.
+    """
+    window.show()
+    qapp = QApplication.instance()
+    qapp.processEvents()
+    if not tree.visualItemRect(item).isValid():  # the row scrolled out of the narrow view
+        tree.setCurrentItem(item)
+        qapp.processEvents()
+    opened = []
+
+    def fake_exec(menu, pos):
+        actions = menu.actions()
+        titles = [a.text() for a in actions]
+        opened.append(titles)
+        if click is not None and click in titles:
+            return actions[titles.index(click)]
+        return None
+
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    handler = window._show_extract_menu if tree is window.tv_extract else window._show_create_menu
+    handler(tree.visualItemRect(item).center())
+    return opened[0] if opened else []
+
+
 def test_both_trees_have_their_own_context_menu(window):
     assert window.tv_extract.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
     assert window.tv_create.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
@@ -600,7 +627,7 @@ def test_only_the_queued_folder_row_gets_the_create_menu(window, dialogs, monkey
     rect = tree.visualItemRect(tree.topLevelItem(0))
     assert rect.isValid() and not rect.isNull()
     window._show_create_menu(rect.center())
-    assert opened == [["Create in..."]]
+    assert opened == [["Create in...", "Remove"]]
 
     def no_menu(*a):
         opened.append("menu over a file row")
@@ -611,7 +638,7 @@ def test_only_the_queued_folder_row_gets_the_create_menu(window, dialogs, monkey
         tree.setCurrentItem(leaf)
         qapp.processEvents()
     window._show_create_menu(tree.visualItemRect(leaf).center())
-    assert opened == [["Create in..."]]  # the file row stayed silent
+    assert opened == [["Create in...", "Remove"]]  # the file row stayed silent
 
 
 def test_create_in_writes_the_archive_into_the_chosen_folder(window, dialogs, monkeypatch, tmp_path):
@@ -683,6 +710,81 @@ def test_create_in_replaces_the_archive_after_asking(window, dialogs, monkeypatc
     assert read_archive(dest / "folder.tzarc").names() == ["config.chump", "folder/fisier.txt"]
 
 
+# ---------------------------------------------------------------------------
+# Remove from the lists (both context menus)
+# ---------------------------------------------------------------------------
+
+def test_remove_offers_itself_only_on_top_level_extract_rows(window, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    tree = window.tv_extract
+    assert _right_click(window, tree, tree.topLevelItem(0), monkeypatch) == ["Extract to...", "Remove"]
+    child = tree.topLevelItem(0).child(0)
+    assert _right_click(window, tree, child, monkeypatch) == ["Extract to..."]  # no Remove below the top
+
+
+def test_remove_takes_an_archive_out_of_the_extract_queue(window, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    tree = window.tv_extract
+    _right_click(window, tree, tree.topLevelItem(0), monkeypatch, click="Remove")
+    assert window.extract_files == []
+    assert tree.topLevelItem(0).text(0) == PLACEHOLDER_EXTRACT  # the hint is back
+    assert tree.topLevelItem(0).isDisabled()
+    assert not window.btn_extract.isEnabled()
+    window.load_paths([str(archive)])  # the seen-key was forgotten too: requeueable
+    assert window.extract_files == [str(archive)]
+    assert tree.topLevelItemCount() == 1 and not tree.topLevelItem(0).isDisabled()
+
+
+def test_remove_keeps_the_other_extract_entries(window, monkeypatch, tmp_path):
+    first = tmp_path / "folder v1.tzarc"
+    first.write_bytes(FOLDER_ARCHIVE.read_bytes())
+    second = tmp_path / "kuid 173000 100413 v2.tzarc"
+    second.write_bytes(V2_ARCHIVE.read_bytes())
+    window.load_paths([str(first), str(second)])
+    tree = window.tv_extract
+    _right_click(window, tree, tree.topLevelItem(0), monkeypatch, click="Remove")
+    assert window.extract_files == [str(second)]
+    assert tree.topLevelItemCount() == 1
+    assert tree.topLevelItem(0).text(0) == f"{second.name} (v2)"
+    assert window.btn_extract.isEnabled()
+
+
+def test_remove_takes_a_folder_out_of_the_create_queue(window, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    other = tmp_path / "other"
+    shutil.copytree(FOLDER, other)
+    window.load_paths([str(source), str(other)])
+    tree = window.tv_create
+    assert _right_click(window, tree, tree.topLevelItem(0), monkeypatch) == ["Create in...", "Remove"]
+    _right_click(window, tree, tree.topLevelItem(0), monkeypatch, click="Remove")
+    assert window.create_dirs == [str(other)]
+    assert tree.topLevelItemCount() == 1
+    assert tree.topLevelItem(0).text(0) == other.name
+    assert window.btn_create.isEnabled()
+    window.load_paths([str(source)])  # forgetting the seen-key allows it back in
+    assert window.create_dirs == [str(other), str(source)]
+
+
+def test_remove_of_the_last_create_folder_brings_the_hint_back(window, monkeypatch, tmp_path):
+    source = tmp_path / "folder"
+    shutil.copytree(FOLDER, source)
+    window.load_paths([str(source)])
+    tree = window.tv_create
+    _right_click(window, tree, tree.topLevelItem(0), monkeypatch, click="Remove")
+    assert window.create_dirs == []
+    assert tree.topLevelItem(0).text(0) == PLACEHOLDER_CREATE
+    assert tree.topLevelItem(0).isDisabled()
+    assert not window.btn_create.isEnabled()
+
+
+def test_remove_menu_never_opens_over_the_drag_hints(window, monkeypatch):
+    assert _right_click(window, window.tv_extract, window.tv_extract.topLevelItem(0), monkeypatch) == []
+    assert _right_click(window, window.tv_create, window.tv_create.topLevelItem(0), monkeypatch) == []
+
+
 def test_the_right_click_menu_offers_extract_to_and_runs_it(window, dialogs, monkeypatch, tmp_path):
     archive = _copy_archive(tmp_path)
     window.load_paths([str(archive)])
@@ -699,7 +801,7 @@ def test_the_right_click_menu_offers_extract_to_and_runs_it(window, dialogs, mon
     monkeypatch.setattr(QMenu, "exec", fake_exec)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
     window._show_extract_menu(QPoint(10, 10))  # over the archive row
-    assert opened == [["Extract to..."]]
+    assert opened == [["Extract to...", "Remove"]]
     assert (dest / archive.stem / "config.chump").is_file()
 
 

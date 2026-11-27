@@ -7,7 +7,8 @@ Extract all / Create all button for the current tab and Clear list sit below
 the tabs.  Right-clicking any entry in the Extract tree offers "Extract to...",
 which unpacks that one file, folder or whole archive into a chosen destination;
 right-clicking a queued folder in the Create tree offers "Create in...", which
-writes its archive into a chosen destination.
+writes its archive into a chosen destination.  Both menus can also "Remove" a
+queued tzarc or folder from its list.
 The compressed v2 checkbox belongs to the Create tab only and keeps
 its state from one run to the next.
 """
@@ -362,15 +363,19 @@ class TzarcWindow(QWidget):
         self._info("Finished extracting files")
 
     def _show_extract_menu(self, pos) -> None:
-        """Right-click menu for the extract tree: Extract to... on any entry."""
+        """Right-click menu for the extract tree: Extract to... on any entry,
+        Remove on the queued tzarc rows."""
         item = self.tv_extract.itemAt(pos)
         if item is None or not item.data(0, Qt.ItemDataRole.UserRole):
-            return  # empty space or the drag hint: nothing to extract
+            return  # empty space or the drag hint: nothing to do here
         menu = QMenu(self)
-        action = menu.addAction("Extract to...")
+        extract_action = menu.addAction("Extract to...")
+        remove_action = menu.addAction("Remove") if item.parent() is None else None
         chosen = menu.exec(self.tv_extract.viewport().mapToGlobal(pos))
-        if chosen is action:
+        if chosen is extract_action:
             self.on_extract_to(item)
+        elif chosen is remove_action:
+            self.on_remove_extract(item)
 
     def on_extract_to(self, item: QTreeWidgetItem) -> None:
         """Extract one right-clicked entry to a destination folder the user picks.
@@ -482,7 +487,8 @@ class TzarcWindow(QWidget):
         self._info("Finished creating archives")
 
     def _show_create_menu(self, pos) -> None:
-        """Right-click menu for the create tree: Create in... on a queued folder.
+        """Right-click menu for the create tree: Create in... and Remove, on
+        the queued folder rows only.
 
         Only the top-level folder rows get the menu; the file rows below them
         are not archives waiting to be created on their own.
@@ -491,10 +497,13 @@ class TzarcWindow(QWidget):
         if item is None or item.parent() is not None or not item.data(0, Qt.ItemDataRole.UserRole):
             return  # empty space, the drag hint or a file row: no menu
         menu = QMenu(self)
-        action = menu.addAction("Create in...")
+        create_action = menu.addAction("Create in...")
+        remove_action = menu.addAction("Remove")
         chosen = menu.exec(self.tv_create.viewport().mapToGlobal(pos))
-        if chosen is action:
+        if chosen is create_action:
             self.on_create_in(item)
+        elif chosen is remove_action:
+            self.on_remove_create(item)
 
     def on_create_in(self, item: QTreeWidgetItem) -> None:
         """Write <folder>.tzarc for the right-clicked queued folder into a
@@ -517,6 +526,30 @@ class TzarcWindow(QWidget):
             self._error(exc, folder_path)
             return
         self._info(f"Finished creating archive for {Path(folder_path).name}")
+
+    def on_remove_extract(self, item: QTreeWidgetItem) -> None:
+        """Take the right-clicked tzarc out of the extract queue."""
+        _, path = item.data(0, Qt.ItemDataRole.UserRole)
+        self._remove_row(self.tv_extract, item, self.extract_files, self._seen_files, path, PLACEHOLDER_EXTRACT)
+
+    def on_remove_create(self, item: QTreeWidgetItem) -> None:
+        """Take the right-clicked folder out of the create queue."""
+        _, path = item.data(0, Qt.ItemDataRole.UserRole)
+        self._remove_row(self.tv_create, item, self.create_dirs, self._seen_dirs, path, PLACEHOLDER_CREATE)
+
+    def _remove_row(self, tree, item, paths: list[str], seen: set[str], path: str, placeholder: str) -> None:
+        """Common Remove: forget the path, drop its row, show the hint if empty.
+
+        The duplicate-detection key goes too, so the same path can be dropped
+        or queued again afterwards.
+        """
+        if path in paths:
+            paths.remove(path)
+        seen.discard(_lookup_key(path))
+        tree.takeTopLevelItem(tree.indexOfTopLevelItem(item))
+        if tree.topLevelItemCount() == 0:
+            self._reset_placeholder(tree, placeholder)
+        self._update_buttons()
 
     def on_clear(self) -> None:
         """Empty the list of the tab on screen and show its hint again."""
