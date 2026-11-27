@@ -200,13 +200,39 @@ def test_queued_archives_show_their_contents(window):
     assert [folder.child(i).text(0) for i in range(folder.childCount())] == ["fisier.txt"]
 
 
-def test_queued_folders_show_their_files(window):
+def test_queued_folders_show_their_files_as_a_tree(window):
     window.load_paths([str(FOLDER)])
     root = window.tv_create.topLevelItem(0)
     assert [root.child(i).text(0) for i in range(root.childCount())] == [
         "config.chump",
-        "folder/fisier.txt",
+        "folder",
     ]
+    folder = root.child(1)
+    assert [folder.child(i).text(0) for i in range(folder.childCount())] == ["fisier.txt"]
+
+
+def test_nested_folder_levels_get_one_row_each(window, tmp_path):
+    source = tmp_path / "deep"
+    deepest = source / "a" / "b" / "c"
+    deepest.mkdir(parents=True)
+    (deepest / "x.txt").write_text("x", encoding="utf-8")
+    (source / "top.txt").write_text("x", encoding="utf-8")
+    window.load_paths([str(source)])
+    root = window.tv_create.topLevelItem(0)
+    assert [root.child(i).text(0) for i in range(root.childCount())] == ["a", "top.txt"]
+    deepest = root.child(0).child(0).child(0)  # a -> b -> c
+    assert deepest.text(0) == "c"
+    assert [deepest.child(i).text(0) for i in range(deepest.childCount())] == ["x.txt"]
+
+
+def test_empty_subfolders_are_not_listed(window, tmp_path):
+    # nothing inside them ever reaches the archive, so they are not shown either
+    source = tmp_path / "src"
+    (source / "empty").mkdir(parents=True)
+    (source / "file.txt").write_text("x", encoding="utf-8")
+    window.load_paths([str(source)])
+    root = window.tv_create.topLevelItem(0)
+    assert [root.child(i).text(0) for i in range(root.childCount())] == ["file.txt"]
 
 
 def test_mixed_drops_fill_both_trees_and_pick_the_busier_tab(window):
@@ -740,12 +766,12 @@ def test_only_the_queued_folder_row_gets_the_create_menu(window, dialogs, monkey
         opened.append("menu over a file row")
 
     monkeypatch.setattr(QMenu, "exec", no_menu)
-    leaf = tree.topLevelItem(0).child(0)
-    if not tree.visualItemRect(leaf).isValid():  # the row scrolled out of the narrow view
-        tree.setCurrentItem(leaf)
-        qapp.processEvents()
-    window._show_create_menu(tree.visualItemRect(leaf).center())
-    assert opened == [["Create in...", "Remove"]]  # the file row stayed silent
+    for row in (tree.topLevelItem(0).child(0), tree.topLevelItem(0).child(1)):  # file and folder
+        if not tree.visualItemRect(row).isValid():  # the row scrolled out of the narrow view
+            tree.setCurrentItem(row)
+            qapp.processEvents()
+        window._show_create_menu(tree.visualItemRect(row).center())
+    assert opened == [["Create in...", "Remove"]]  # the rows below the folder stayed silent
 
 
 def test_create_in_writes_the_archive_into_the_chosen_folder(window, dialogs, monkeypatch, tmp_path):
@@ -954,6 +980,20 @@ def test_filter_reveals_matches_inside_collapsed_archive_folders(window, tmp_pat
     assert not folder.isHidden() and folder.isExpanded()  # opened so the match is reachable
     assert root.child(0).isHidden()  # config.chump misses the filter
     assert not folder.child(0).isHidden()
+
+
+def test_filter_opens_a_queued_folder_down_to_its_match(window, tmp_path):
+    source = tmp_path / "kuid123"
+    deep = source / "sub" / "deeper"
+    deep.mkdir(parents=True)
+    (deep / "target.txt").write_text("x", encoding="utf-8")
+    (source / "other.txt").write_text("x", encoding="utf-8")
+    window.load_paths([str(source)])
+    window.edit_filter.setText("target")
+    assert _visible_rows(window.tv_create) == {"kuid123": ["sub", "deeper", "target.txt"]}
+    root = window.tv_create.topLevelItem(0)
+    assert root.child(0).isHidden()  # other.txt misses the filter
+    assert root.child(1).isExpanded() and root.child(1).child(0).isExpanded()
 
 
 def test_filter_ignores_case(window, tmp_path):

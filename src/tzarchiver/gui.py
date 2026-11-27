@@ -1,12 +1,12 @@
 """PyQt6 GUI for TZarchiver.
 
 A resizable portrait window with a tabbed queue: the Extract tab lists the
-tzarc files dropped on the window (each expanded with its contents), the
-Create tab lists the folders to archive (expanded with their files).  The
-Extract all / Extract all to... and Create all / Create all to... buttons
-for the current tab and Clear list sit below the tabs.  Right-clicking any
-entry in the Extract tree offers "Extract to...",
-which unpacks that one file, folder or whole archive into a chosen destination;
+tzarc files dropped on the window and the Create tab the folders to archive,
+each expanded into a real folder/file tree.  The Extract all / Extract all
+to... and Create all / Create all to... buttons for the current tab and Clear
+list sit below the tabs.  Right-clicking any entry in the Extract tree offers
+"Extract to...", which unpacks that one file, folder or whole archive into a
+chosen destination;
 right-clicking a queued folder in the Create tree offers "Create in...", which
 writes its archive into a chosen destination.  Both menus can also "Remove" a
 queued tzarc or folder from its list.  A Filter box under the tabs hides,
@@ -353,20 +353,21 @@ class TzarcWindow(QWidget):
             self._error(exc, path)
         else:
             root.setText(0, f"{Path(path).name} (v{archive.version})")  # show the tzarc version
-            self._add_entry_nodes(root, archive)
+            self._add_path_nodes(root, (entry.name for entry in archive.entries))
         root.setExpanded(True)
         self._apply_filter(self.edit_filter.text())  # a running filter covers it too
 
     @staticmethod
-    def _add_entry_nodes(root: QTreeWidgetItem, archive) -> None:
-        """Show the archive's entries as a real tree: folder nodes, file leaves.
+    def _add_path_nodes(root: QTreeWidgetItem, names) -> None:
+        """Show slash-separated ``names`` under ``root`` as a real tree.
 
-        Entry names carry their folders as forward slashes, so each path part
-        gets one node that all entries below it share.
+        Every folder part gets one node that all entries below it share, so a
+        nested name like "summer/winter/x.txt" reads as three levels instead of
+        one long row.
         """
         folders: dict[str, QTreeWidgetItem] = {}
-        for entry in archive.entries:
-            parts = entry.name.split("/")
+        for name in names:
+            parts = name.split("/")
             parent = root
             prefix = ""
             for part in parts[:-1]:
@@ -379,7 +380,7 @@ class TzarcWindow(QWidget):
                     folders[prefix] = node
                 parent = node
             leaf = QTreeWidgetItem([parts[-1]])
-            leaf.setData(0, Qt.ItemDataRole.UserRole, (FILE_ENTRY, entry.name))
+            leaf.setData(0, Qt.ItemDataRole.UserRole, (FILE_ENTRY, name))
             parent.addChild(leaf)
 
     def _add_create_folder(self, path: str) -> None:
@@ -394,9 +395,12 @@ class TzarcWindow(QWidget):
         root.setData(0, Qt.ItemDataRole.UserRole, (QUEUED_FOLDER_ENTRY, path))
         self.tv_create.addTopLevelItem(root)
         base = Path(path)
-        for child in sorted(base.rglob("*")):
-            if child.is_file():
-                root.addChild(QTreeWidgetItem([child.relative_to(base).as_posix()]))
+        # folders on disk hold the same tree as an archive: nested paths become
+        # nested rows; empty folders are not archived, so they are not listed
+        names = [
+            child.relative_to(base).as_posix() for child in sorted(base.rglob("*")) if child.is_file()
+        ]
+        self._add_path_nodes(root, names)
         root.setExpanded(True)
         self._apply_filter(self.edit_filter.text())  # a running filter covers it too
 
@@ -586,12 +590,12 @@ class TzarcWindow(QWidget):
         """Right-click menu for the create tree: Create in... and Remove, on
         the queued folder rows only.
 
-        Only the top-level folder rows get the menu; the file rows below them
-        are not archives waiting to be created on their own.
+        Only the top-level folder rows get the menu; the folder and file rows
+        below them are not archives waiting to be created on their own.
         """
         item = self.tv_create.itemAt(pos)
         if item is None or item.parent() is not None or not item.data(0, Qt.ItemDataRole.UserRole):
-            return  # empty space, the drag hint or a file row: no menu
+            return  # empty space, the drag hint or a contents row: no menu
         menu = QMenu(self)
         create_action = menu.addAction("Create in...")
         remove_action = menu.addAction("Remove")
