@@ -130,6 +130,41 @@ class Archive:
             target.write_bytes(self.read(entry.name))
         return dest
 
+    def extract_entry(self, name: str, dest_dir: str | Path) -> Path:
+        """Write the single file ``name`` into ``dest_dir``, by its own name.
+
+        The folders the entry sits in inside the archive are not recreated:
+        the chosen destination becomes the file's folder.
+        """
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        base = name.replace("\\", "/").split("/")[-1]
+        target = _safe_join(dest, base)
+        target.write_bytes(self.read(name))
+        return target
+
+    def extract_folder(self, prefix: str, dest_dir: str | Path) -> Path:
+        """Write every file below the folder ``prefix`` into ``dest_dir``.
+
+        The folder itself is recreated inside ``dest_dir`` under its own name
+        and keeps the structure of everything below it.
+        """
+        prefix = prefix.replace("\\", "/").strip("/")
+        start = prefix + "/"
+        dest = Path(dest_dir) / Path(prefix).name
+        dest.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for entry in self.entries:
+            if not entry.name.replace("\\", "/").startswith(start):
+                continue
+            target = _safe_join(dest, entry.name[len(start) :])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(self.read(entry.name))
+            written += 1
+        if written == 0:
+            raise TzarcError(f"folder {prefix} is not in this archive")
+        return dest
+
 
 def default_extract_dir(archive_path: str | Path) -> Path:
     """Folder the original app extracts to: ``<archive dir>\\<archive name>``."""

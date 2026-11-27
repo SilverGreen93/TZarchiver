@@ -17,8 +17,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets")
 
-from PyQt6.QtCore import QSize  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
+from PyQt6.QtCore import QPoint, QSize, Qt  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMenu, QMessageBox  # noqa: E402
 
 from tzarchiver import gui  # noqa: E402
 from tzarchiver.gui import (  # noqa: E402
@@ -181,8 +181,10 @@ def test_queued_archives_show_their_contents(window):
     root = window.tv_extract.topLevelItem(0)
     assert [root.child(i).text(0) for i in range(root.childCount())] == [
         "config.chump",
-        "folder/fisier.txt",
+        "folder",
     ]
+    folder = root.child(1)
+    assert [folder.child(i).text(0) for i in range(folder.childCount())] == ["fisier.txt"]
 
 
 def test_queued_folders_show_their_files(window):
@@ -286,6 +288,184 @@ def test_extract_reports_bad_archives_and_carries_on(window, dialogs, tmp_path):
     assert dialogs[-1] == ("info", "Finished extracting files")
     assert kinds.count("error") == 2  # once while listing, once while extracting
     assert (tmp_path / archive.stem / "config.chump").is_file()
+
+
+# ---------------------------------------------------------------------------
+# extract tab context menu (Extract to...)
+# ---------------------------------------------------------------------------
+
+def _copy_archive(tmp_path):
+    archive = tmp_path / FOLDER_ARCHIVE.name
+    archive.write_bytes(FOLDER_ARCHIVE.read_bytes())
+    return archive
+
+
+def test_only_the_extract_tree_has_a_context_menu(window):
+    assert window.tv_extract.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    assert window.tv_create.contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu
+
+
+def test_extract_to_on_the_archive_unpacks_into_a_folder_named_after_it(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_extract_to(window.tv_extract.topLevelItem(0))
+    made = dest / archive.stem
+    assert (made / "config.chump").read_bytes() == (FOLDER / "config.chump").read_bytes()
+    assert (made / "folder" / "fisier.txt").read_bytes() == b"abcdabcdabcd"
+    assert ("info", f"Finished extracting from {archive.name}") in dialogs
+
+
+def test_extract_to_on_a_file_writes_just_that_file(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    root = window.tv_extract.topLevelItem(0)
+    window.on_extract_to(root.child(0))  # config.chump
+    assert (dest / "config.chump").read_bytes() == (FOLDER / "config.chump").read_bytes()
+    assert not (dest / "folder").exists()
+
+
+def test_extract_to_on_a_nested_file_writes_it_without_its_folders(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    folder = window.tv_extract.topLevelItem(0).child(1)  # the "folder" node
+    window.on_extract_to(folder.child(0))  # fisier.txt
+    assert (dest / "fisier.txt").read_bytes() == b"abcdabcdabcd"
+
+
+def test_extract_to_on_a_folder_recreates_it_in_the_destination(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    folder = window.tv_extract.topLevelItem(0).child(1)
+    window.on_extract_to(folder)
+    assert (dest / "folder" / "fisier.txt").read_bytes() == b"abcdabcdabcd"
+    assert not (dest / "config.chump").exists()
+
+
+def test_extract_to_does_nothing_when_the_dialog_is_cancelled(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
+    window.on_extract_to(window.tv_extract.topLevelItem(0))
+    assert not (tmp_path / archive.stem).exists()
+    assert dialogs == []
+
+
+def _patch_question(monkeypatch, answer, asked: list):
+    """Replace the yes/no box with one that records the question and answers it."""
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda parent, title, text, *a, **k: asked.append(text) or answer),
+    )
+
+
+def test_extract_to_overwrites_an_existing_file_after_asking(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    (dest).mkdir()
+    (dest / "config.chump").write_bytes(b"old bytes")
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked: list[str] = []
+    _patch_question(monkeypatch, QMessageBox.StandardButton.Yes, asked)
+    window.on_extract_to(window.tv_extract.topLevelItem(0).child(0))  # config.chump
+    assert asked and "config.chump" in asked[0]
+    assert (dest / "config.chump").read_bytes() == (FOLDER / "config.chump").read_bytes()
+
+
+def test_extract_to_keeps_the_file_when_overwrite_is_refused(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    (dest).mkdir()
+    (dest / "config.chump").write_bytes(b"old bytes")
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked: list[str] = []
+    _patch_question(monkeypatch, QMessageBox.StandardButton.No, asked)
+    window.on_extract_to(window.tv_extract.topLevelItem(0).child(0))  # config.chump
+    assert asked and "config.chump" in asked[0]
+    assert (dest / "config.chump").read_bytes() == b"old bytes"
+    assert not (dest / "folder").exists()
+    assert dialogs == []
+
+
+def test_extract_to_overwrites_an_existing_folder_after_asking(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    (dest / archive.stem).mkdir(parents=True)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    asked: list[str] = []
+    _patch_question(monkeypatch, QMessageBox.StandardButton.Yes, asked)
+    window.on_extract_to(window.tv_extract.topLevelItem(0))  # the tzarc row
+    assert asked and archive.stem in asked[0]
+    assert (dest / archive.stem / "config.chump").read_bytes() == (FOLDER / "config.chump").read_bytes()
+
+
+def test_extract_to_refuses_the_whole_archive_folder_and_stops(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    made = dest / archive.stem
+    made.mkdir(parents=True)
+    (made / "keep.txt").write_text("mine", encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    _patch_question(monkeypatch, QMessageBox.StandardButton.No, [])
+    window.on_extract_to(window.tv_extract.topLevelItem(0))  # the tzarc row
+    assert sorted(p.name for p in made.iterdir()) == ["keep.txt"]
+    assert dialogs == []
+
+
+def test_extract_to_asks_nothing_when_the_target_is_new(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+
+    def no_question(*a, **k):
+        raise AssertionError("asked to overwrite when nothing was there")
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(no_question))
+    window.on_extract_to(window.tv_extract.topLevelItem(0).child(1))  # the folder row
+    assert (dest / "folder" / "fisier.txt").is_file()
+
+
+def test_the_right_click_menu_offers_extract_to_and_runs_it(window, dialogs, monkeypatch, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    window.show()
+    qapp = QApplication.instance()
+    qapp.processEvents()
+    dest = tmp_path / "out"
+    opened = []
+
+    def fake_exec(menu, pos):
+        opened.append([a.text() for a in menu.actions()])
+        return menu.actions()[0]  # as if Extract to... had been clicked
+
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window._show_extract_menu(QPoint(10, 10))  # over the archive row
+    assert opened == [["Extract to..."]]
+    assert (dest / archive.stem / "config.chump").is_file()
+
+
+def test_the_right_click_menu_stays_hidden_on_the_drag_hint(window, monkeypatch, qapp):
+    window.show()
+    qapp.processEvents()
+
+    def fake_exec(menu, pos):
+        raise AssertionError("a menu opened over the placeholder")
+
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    window._show_extract_menu(QPoint(10, 10))  # only the placeholder row is there
 
 
 def test_create_all_archives_every_queued_folder(window, dialogs, tmp_path):

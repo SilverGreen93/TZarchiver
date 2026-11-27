@@ -4,7 +4,9 @@ A resizable portrait window with a tabbed queue: the Extract tab lists the
 tzarc files dropped on the window (each expanded with its contents), the
 Create tab lists the folders to archive (expanded with their files).  The
 Extract all / Create all button for the current tab and Clear list sit below
-the tabs.  The compressed v2 checkbox belongs to the Create tab only and keeps
+the tabs.  Right-clicking any entry in the Extract tree offers "Extract to...",
+which unpacks that one file, folder or whole archive into a chosen destination.
+The compressed v2 checkbox belongs to the Create tab only and keeps
 its state from one run to the next.
 """
 
@@ -21,8 +23,10 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -53,6 +57,9 @@ PLACEHOLDER_EXTRACT = "Drag & drop tzarc files here"
 PLACEHOLDER_CREATE = "Drag & drop folders here"
 
 EXTRACT_TAB, CREATE_TAB = 0, 1
+
+# what an extract-tree row stands for, kept in the row's UserRole data
+TZARC_ENTRY, FOLDER_ENTRY, FILE_ENTRY = "tzarc", "folder", "file"
 
 # what the GUI carries over from one run to the next, and where it keeps it
 SETTINGS_APP = "TZarchiver"
@@ -160,6 +167,8 @@ class TzarcWindow(QWidget):
         # the tabbed queue: one independent tree per tab
         self.tabs = QTabWidget()
         self.tv_extract = self._make_tree(PLACEHOLDER_EXTRACT)
+        self.tv_extract.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tv_extract.customContextMenuRequested.connect(self._show_extract_menu)
         self.tabs.addTab(self.tv_extract, "Extract")
 
         self.tv_create = self._make_tree(PLACEHOLDER_CREATE)
@@ -264,6 +273,7 @@ class TzarcWindow(QWidget):
         self.extract_files.append(path)
         self._update_buttons()
         root = QTreeWidgetItem([Path(path).name])
+        root.setData(0, Qt.ItemDataRole.UserRole, (TZARC_ENTRY, path))
         self.tv_extract.addTopLevelItem(root)
         try:
             archive = read_archive(path)
@@ -271,9 +281,33 @@ class TzarcWindow(QWidget):
             self._error(exc, path)
         else:
             root.setText(0, f"{Path(path).name} (v{archive.version})")  # show the tzarc version
-            for entry in archive.entries:
-                root.addChild(QTreeWidgetItem([entry.name]))
+            self._add_entry_nodes(root, archive)
         root.setExpanded(True)
+
+    @staticmethod
+    def _add_entry_nodes(root: QTreeWidgetItem, archive) -> None:
+        """Show the archive's entries as a real tree: folder nodes, file leaves.
+
+        Entry names carry their folders as forward slashes, so each path part
+        gets one node that all entries below it share.
+        """
+        folders: dict[str, QTreeWidgetItem] = {}
+        for entry in archive.entries:
+            parts = entry.name.split("/")
+            parent = root
+            prefix = ""
+            for part in parts[:-1]:
+                prefix = f"{prefix}/{part}" if prefix else part
+                node = folders.get(prefix)
+                if node is None:
+                    node = QTreeWidgetItem([part])
+                    node.setData(0, Qt.ItemDataRole.UserRole, (FOLDER_ENTRY, prefix))
+                    parent.addChild(node)
+                    folders[prefix] = node
+                parent = node
+            leaf = QTreeWidgetItem([parts[-1]])
+            leaf.setData(0, Qt.ItemDataRole.UserRole, (FILE_ENTRY, entry.name))
+            parent.addChild(leaf)
 
     def _add_create_folder(self, path: str) -> None:
         key = _lookup_key(path)
@@ -304,6 +338,66 @@ class TzarcWindow(QWidget):
                 self._error(exc, path)
                 continue
         self._info("Finished extracting files")
+
+    def _show_extract_menu(self, pos) -> None:
+        """Right-click menu for the extract tree: Extract to... on any entry."""
+        item = self.tv_extract.itemAt(pos)
+        if item is None or not item.data(0, Qt.ItemDataRole.UserRole):
+            return  # empty space or the drag hint: nothing to extract
+        menu = QMenu(self)
+        action = menu.addAction("Extract to...")
+        chosen = menu.exec(self.tv_extract.viewport().mapToGlobal(pos))
+        if chosen is action:
+            self.on_extract_to(item)
+
+    def on_extract_to(self, item: QTreeWidgetItem) -> None:
+        """Extract one right-clicked entry to a destination folder the user picks.
+
+        A tzarc row unpacks the whole archive into a new folder named after it,
+        a folder row recreates that folder (with everything below it) in the
+        destination, and a file row just writes the file itself there.  When
+        that file or folder is already there, the user is asked before it is
+        overwritten; saying no leaves it untouched.
+        """
+        kind, value = item.data(0, Qt.ItemDataRole.UserRole)
+        top = item
+        while top.parent() is not None:
+            top = top.parent()
+        archive_path = top.data(0, Qt.ItemDataRole.UserRole)[1]
+        dest = QFileDialog.getExistingDirectory(self, "Extract to...", str(Path(archive_path).parent))
+        if not dest:
+            return  # dialog cancelled: leave everything alone
+        if kind == TZARC_ENTRY:
+            target = Path(dest) / Path(archive_path).stem
+        elif kind == FOLDER_ENTRY:
+            target = Path(dest) / Path(value.replace("\\", "/")).name
+        else:
+            target = Path(dest) / value.replace("\\", "/").split("/")[-1]
+        if target.exists() and not self._confirm_overwrite(target):
+            return
+        try:
+            archive = read_archive(archive_path)
+            if kind == TZARC_ENTRY:
+                archive.extract(target)
+            elif kind == FOLDER_ENTRY:
+                archive.extract_folder(value, dest)
+            else:
+                archive.extract_entry(value, dest)
+        except (TzarcError, OSError) as exc:
+            self._error(exc, archive_path)
+            return
+        self._info(f"Finished extracting from {Path(archive_path).name}")
+
+    def _confirm_overwrite(self, target: Path) -> bool:
+        """Ask whether the already existing extraction target may be overwritten."""
+        answer = QMessageBox.question(
+            self,
+            "Already exists",
+            f"{target.name} already exists in the destination.\nOverwrite it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def on_create(self) -> None:
         """Archive every queued folder, as the Create all button does.

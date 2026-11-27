@@ -126,6 +126,38 @@ def test_extract_creates_subfolders(tmp_path):
     assert (tmp_path / "out" / "folder" / "fisier.txt").read_bytes() == (FOLDER / "folder" / "fisier.txt").read_bytes()
 
 
+def test_extract_entry_writes_one_file_without_its_inner_folders(tmp_path):
+    archive = read_archive(FOLDER_ARCHIVE)
+    made = archive.extract_entry("folder/fisier.txt", tmp_path / "out")
+    assert made == tmp_path / "out" / "fisier.txt"
+    assert made.read_bytes() == (FOLDER / "folder" / "fisier.txt").read_bytes()
+    assert not (tmp_path / "out" / "folder").exists()
+
+
+def test_extract_entry_rejects_unknown_names(tmp_path):
+    archive = read_archive(FOLDER_ARCHIVE)
+    with pytest.raises(TzarcError, match="not in this archive"):
+        archive.extract_entry("nope.bin", tmp_path)
+
+
+def test_extract_folder_recreates_the_folder_and_everything_below_it(tmp_path):
+    archive = read_archive(V2_ARCHIVE)  # holds summer/ and winter/ subfolders
+    dest = archive.extract_folder("summer", tmp_path / "out")
+    assert dest == tmp_path / "out" / "summer"
+    extracted = {p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file()}
+    assert extracted == {n[len("summer/") :] for n in archive.names() if n.startswith("summer/")}
+    for name in extracted:
+        assert (dest / name).read_bytes() == archive.read(f"summer/{name}")
+
+
+def test_extract_folder_rejects_prefixes_holding_no_files(tmp_path):
+    archive = read_archive(FOLDER_ARCHIVE)
+    with pytest.raises(TzarcError, match="not in this archive"):
+        archive.extract_folder("nope", tmp_path)
+    with pytest.raises(TzarcError, match="not in this archive"):
+        archive.extract_folder("folder/fisier.txt", tmp_path)
+
+
 def test_default_extract_dir_is_the_archive_name_beside_it():
     assert default_extract_dir(Path("C:/trainz/content/kuid 474195 20651 v1.tzarc")) == Path("C:/trainz/content/kuid 474195 20651 v1")
 
