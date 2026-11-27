@@ -34,7 +34,7 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parent
 APP_NAME = "TZarchiver"
 AUTHOR = "SilverGreen93"
-VERSION = "2.0"
+VERSION = "2.1"
 ICON_ICO = ROOT / "assets" / "175.ico"
 ICON_PNG = ROOT / "assets" / "tzarchiver.png"  # for the .desktop entry / dmg (optional)
 GUI_ENTRY = ROOT / "tzarchiver_gui_entry.py"

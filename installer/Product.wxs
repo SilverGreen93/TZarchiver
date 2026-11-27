@@ -13,11 +13,11 @@
   Build with installer\build.ps1 (build the exes first with build.py), or
   manually (always -arch x64 - see the comment inside <Package>):
 
-    wix build installer\Product.wxs -arch x64 -ext WixToolset.UI.wixext -d Version=2.0 -o TZarchiver-2.0.msi
+    wix build installer\Product.wxs -arch x64 -ext WixToolset.UI.wixext -d Version=2.1 -o TZarchiver-2.1.msi
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
-  <?ifndef Version?><?define Version = "2.0" ?><?endif?>
+  <?ifndef Version?><?define Version = "2.1" ?><?endif?>
   <?ifndef DistDir?><?define DistDir = "..\dist" ?><?endif?>
   <?ifndef AssetsDir?><?define AssetsDir = "..\assets" ?><?endif?>
 
