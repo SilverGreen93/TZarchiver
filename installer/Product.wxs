@@ -59,7 +59,7 @@
     <Property Id="DisplayName" Value="TZarchiver" />
     <Property Id="DisplayVersion" Value="$(var.Version)" />
     <Property Id="Publisher" Value="SilverGreen93" />
-    <Property Id="ARPCOMMENTS" Value="Trainz .tzarc archive tool (GUI + command line)." />
+    <Property Id="ARPCOMMENTS" Value="Trainz .tzarc/.ja archive tool (GUI + command line)." />
     <!-- The ARP URL/contact values are published from the ARP*-prefixed
          properties, NOT from plain URLInfoAbout/Contact. -->
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/SilverGreen93/TZarchiver" />
@@ -112,7 +112,7 @@
                      KeyPath="yes" />
       <Shortcut Id="ApplicationShortcut"
                 Name="TZarchiver"
-                Description="Trainz .tzarc archive extractor/creator"
+                Description="Trainz .tzarc/.ja archive extractor/creator"
                 Target="[INSTALLFOLDER]TZarchiver.exe"
                 WorkingDirectory="INSTALLFOLDER" />
       <RemoveFolder Id="RemoveApplicationMenuFolder" On="uninstall" />

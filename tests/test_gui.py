@@ -330,6 +330,84 @@ def test_extract_reports_bad_archives_and_carries_on(window, dialogs, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Jet Archive (.ja) files in the Extract tab
+# ---------------------------------------------------------------------------
+
+def _write_ja(tmp_path):
+    from ja_builder import build_ja, sample_members
+
+    path = tmp_path / "Data.ja"
+    path.write_bytes(build_ja(sample_members()))
+    return path
+
+
+def test_a_jet_archive_shows_its_version_and_tree(window, tmp_path):
+    path = _write_ja(tmp_path)
+    window.load_paths([str(path)])
+    root = window.tv_extract.topLevelItem(0)
+    assert root.text(0) == "Data.ja (ja 1.2)"
+    assert [root.child(i).text(0) for i in range(root.childCount())] == [
+        "config.chump",
+        "sounds",
+        "license.txt",
+    ]
+    sounds = root.child(1)
+    assert [sounds.child(i).text(0) for i in range(sounds.childCount())] == ["beep.wav", "loop"]
+    assert [sounds.child(1).child(i).text(0) for i in range(sounds.child(1).childCount())] == [
+        "beep2.wav"
+    ]
+
+
+def test_extract_all_unpacks_a_jet_archive(window, dialogs, tmp_path):
+    from ja_builder import BIG
+
+    path = _write_ja(tmp_path)
+    window.load_paths([str(path)])
+    window.on_extract()
+    made = tmp_path / "Data"
+    assert (made / "config.chump").read_bytes() == (
+        b"a small file, stored as is\n" * 3
+    )
+    assert (made / "sounds" / "beep.wav").read_bytes() == BIG
+    assert (made / "sounds" / "loop" / "beep2.wav").read_bytes() == BIG
+    assert dialogs[-1] == ("info", "Finished extracting files")
+
+
+def test_extract_to_on_a_jet_archive_folder_recreates_it(window, dialogs, monkeypatch, tmp_path):
+    from ja_builder import BIG
+
+    path = _write_ja(tmp_path)
+    window.load_paths([str(path)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_extract_to(window.tv_extract.topLevelItem(0).child(1))  # the "sounds" row
+    assert (dest / "sounds" / "beep.wav").read_bytes() == BIG
+    assert (dest / "sounds" / "loop" / "beep2.wav").read_bytes() == BIG
+    assert not (dest / "license.txt").exists()
+
+
+def test_extract_to_on_a_jet_archive_file_writes_just_that_file(window, dialogs, monkeypatch, tmp_path):
+    from ja_builder import SMALL
+
+    path = _write_ja(tmp_path)
+    window.load_paths([str(path)])
+    dest = tmp_path / "out"
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(dest)))
+    window.on_extract_to(window.tv_extract.topLevelItem(0).child(0))  # config.chump
+    assert (dest / "config.chump").read_bytes() == SMALL
+
+
+def test_a_jet_archive_reports_a_bad_file_once_per_row(window, dialogs, tmp_path):
+    junk = tmp_path / "notes.ja"
+    junk.write_bytes(b"not an archive at all")
+    window.load_paths([str(junk)])
+    assert dialogs[0][0] == "error"
+    assert "File format not supported" in dialogs[0][1]
+    window.on_extract()
+    assert dialogs[-1] == ("info", "Finished extracting files")
+
+
+# ---------------------------------------------------------------------------
 # extract tab context menu (Extract to...)
 # ---------------------------------------------------------------------------
 

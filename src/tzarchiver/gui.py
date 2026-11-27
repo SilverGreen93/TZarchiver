@@ -1,15 +1,15 @@
 """PyQt6 GUI for TZarchiver.
 
 A resizable portrait window with a tabbed queue: the Extract tab lists the
-tzarc files dropped on the window and the Create tab the folders to archive,
-each expanded into a real folder/file tree.  The Extract all / Extract all
-to... and Create all / Create all in... buttons for the current tab and Clear
-list sit below the tabs.  Right-clicking any entry in the Extract tree offers
-"Extract to...", which unpacks that one file, folder or whole archive into a
-chosen destination;
+tzarc and ja files dropped on the window and the Create tab the folders to
+archive, each expanded into a real folder/file tree.  The Extract all /
+Extract all to... and Create all / Create all in... buttons for the current
+tab and Clear list sit below the tabs.  Right-clicking any entry in the
+Extract tree offers "Extract to...", which unpacks that one file, folder or
+whole archive into a chosen destination;
 right-clicking a queued folder in the Create tree offers "Create in...", which
 writes its archive into a chosen destination.  Both menus can also "Remove" a
-queued tzarc or folder from its list.  A Filter box under the tabs hides,
+queued archive or folder from its list.  A Filter box under the tabs hides,
 letter by letter, every list row whose name misses the typed text, keeping
 matching entries and their parents.
 The compressed v2 checkbox belongs to the Create tab only and keeps
@@ -44,14 +44,8 @@ from PyQt6.QtWidgets import (
 )
 
 from . import __version__
-from .tzarc import (
-    V1,
-    V2,
-    TzarcError,
-    create_archive,
-    default_extract_dir,
-    read_archive,
-)
+from .archive import ArchiveError, default_extract_dir, open_archive
+from .tzarc import V1, V2, TzarcError, create_archive
 
 __all__ = ["TzarcWindow", "run_gui"]
 
@@ -60,13 +54,13 @@ _ASSET_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 APP_TITLE = f"TZarchiver {__version__}"
 GITHUB_URL = "https://github.com/SilverGreen93/TZarchiver"
 ICON_FILE = "175.ico"
-PLACEHOLDER_EXTRACT = "Drag & drop tzarc files here"
+PLACEHOLDER_EXTRACT = "Drag & drop tzarc or ja files here"
 PLACEHOLDER_CREATE = "Drag & drop folders here"
 
 EXTRACT_TAB, CREATE_TAB = 0, 1
 
 # what a tree row stands for, kept in the row's UserRole data
-TZARC_ENTRY, FOLDER_ENTRY, FILE_ENTRY = "tzarc", "folder", "file"
+ARCHIVE_ENTRY, FOLDER_ENTRY, FILE_ENTRY = "archive", "folder", "file"
 # the create tree's top-level rows are queued folders on disk
 QUEUED_FOLDER_ENTRY = "queued folder"
 
@@ -345,14 +339,14 @@ class TzarcWindow(QWidget):
         self.extract_files.append(path)
         self._update_buttons()
         root = QTreeWidgetItem([Path(path).name])
-        root.setData(0, Qt.ItemDataRole.UserRole, (TZARC_ENTRY, path))
+        root.setData(0, Qt.ItemDataRole.UserRole, (ARCHIVE_ENTRY, path))
         self.tv_extract.addTopLevelItem(root)
         try:
-            archive = read_archive(path)
-        except (TzarcError, OSError) as exc:
+            archive = open_archive(path)
+        except (ArchiveError, OSError) as exc:
             self._error(exc, path)
         else:
-            root.setText(0, f"{Path(path).name} (v{archive.version})")  # show the tzarc version
+            root.setText(0, f"{Path(path).name} ({archive.format_label})")  # v1/v2 or ja 1.2
             self._add_path_nodes(root, (entry.name for entry in archive.entries))
         root.setExpanded(True)
         self._apply_filter(self.edit_filter.text())  # a running filter covers it too
@@ -440,16 +434,16 @@ class TzarcWindow(QWidget):
                 if choice in ("no", "none"):
                     continue
             try:
-                archive = read_archive(path)
+                archive = open_archive(path)
                 archive.extract(target)
-            except (TzarcError, OSError) as exc:
+            except (ArchiveError, OSError) as exc:
                 self._error(exc, path)
                 continue
         self._info("Finished extracting files")
 
     def _show_extract_menu(self, pos) -> None:
         """Right-click menu for the extract tree: Extract to... on any entry,
-        Remove on the queued tzarc rows."""
+        Remove on the queued archive rows."""
         item = self.tv_extract.itemAt(pos)
         if item is None or not item.data(0, Qt.ItemDataRole.UserRole):
             return  # empty space or the drag hint: nothing to do here
@@ -465,8 +459,8 @@ class TzarcWindow(QWidget):
     def on_extract_to(self, item: QTreeWidgetItem) -> None:
         """Extract one right-clicked entry to a destination folder the user picks.
 
-        A tzarc row unpacks the whole archive into a new folder named after it,
-        a folder row recreates that folder (with everything below it) in the
+        An archive row unpacks the whole archive into a new folder named after
+        it, a folder row recreates that folder (with everything below it) in the
         destination, and a file row just writes the file itself there.  When
         that file or folder is already there, the user is asked before it is
         overwritten; saying no leaves it untouched.
@@ -479,7 +473,7 @@ class TzarcWindow(QWidget):
         dest = QFileDialog.getExistingDirectory(self, "Extract to...", str(Path(archive_path).parent))
         if not dest:
             return  # dialog cancelled: leave everything alone
-        if kind == TZARC_ENTRY:
+        if kind == ARCHIVE_ENTRY:
             target = Path(dest) / Path(archive_path).stem
         elif kind == FOLDER_ENTRY:
             target = Path(dest) / Path(value.replace("\\", "/")).name
@@ -488,14 +482,14 @@ class TzarcWindow(QWidget):
         if target.exists() and self._ask_overwrite(target) != QMessageBox.StandardButton.Yes:
             return
         try:
-            archive = read_archive(archive_path)
-            if kind == TZARC_ENTRY:
+            archive = open_archive(archive_path)
+            if kind == ARCHIVE_ENTRY:
                 archive.extract(target)
             elif kind == FOLDER_ENTRY:
                 archive.extract_folder(value, dest)
             else:
                 archive.extract_entry(value, dest)
-        except (TzarcError, OSError) as exc:
+        except (ArchiveError, OSError) as exc:
             self._error(exc, archive_path)
             return
         self._info(f"Finished extracting from {Path(archive_path).name}")

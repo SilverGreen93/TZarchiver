@@ -2,7 +2,8 @@
 
 With no arguments the GUI launches; with one or more paths the app runs in CLI
 mode: archives are listed (and optionally extracted), folders are turned into
-``<folder>.tzarc`` archives.
+``<folder>.tzarc`` archives.  Both ``*.tzarc`` and the older Jet Archive
+``*.ja`` can be listed and extracted; only tzarc archives can be created.
 
 Port of the command line handling in frmMain.vb.
 """
@@ -13,15 +14,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .tzarc import (
-    V1,
-    V2,
-    Archive,
-    TzarcError,
-    create_archive,
-    default_extract_dir,
-    read_archive,
-)
+from .archive import ArchiveBase, ArchiveError, default_extract_dir, open_archive
+from .tzarc import V1, V2, create_archive
 
 __all__ = ["main", "run_cli", "describe"]
 
@@ -33,9 +27,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="tzarchiver",
-        description="Extract or create Trainz .tzarc archives.",
+        description="Extract or create Trainz .tzarc and .ja archives.",
     )
-    parser.add_argument("paths", nargs="*", help=".tzarc files and/or folders to archive")
+    parser.add_argument("paths", nargs="*", help=".tzarc/.ja files and/or folders to archive")
     parser.add_argument("-x", "--extract", action="store_true", help="extract archives instead of only listing them")
     parser.add_argument("-o", "--out", help="extract to this folder instead of <archive name> beside the archive")
     parser.add_argument("--v2", action="store_true", help="create compressed (version 2) archives")
@@ -65,7 +59,8 @@ def run_cli(paths: list[str], extract: bool = False, out: str | None = None, v2:
     """Process every path, printing what happened. Returns False if any failed.
 
     Folders are archived into ``<folder>.tzarc`` (the app's Create button),
-    files are read as archives (its Extract button).
+    files are read as archives, tzarc or Jet Archive alike (its Extract
+    button).
     """
     ok = True
     version = V2 if v2 else V1
@@ -78,21 +73,23 @@ def run_cli(paths: list[str], extract: bool = False, out: str | None = None, v2:
                 archive.write(target, version=version)
                 print(f"created {target} ({len(archive)} file{'s' if len(archive) != 1 else ''}, v{version})")
             else:
-                archive = read_archive(path)
+                archive = open_archive(path)
                 print(describe(path, archive))
                 if extract:
                     dest = archive.extract(out if out else default_extract_dir(path))
                     print(f"extracted to {dest}")
-        except (TzarcError, OSError) as exc:
+        except (ArchiveError, OSError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             ok = False
     return ok
 
 
-def describe(path: str | Path, archive: Archive | None = None) -> str:
+def describe(path: str | Path, archive: ArchiveBase | None = None) -> str:
     """Multi-line listing of an archive, as shown in the GUI tree."""
-    archive = archive or read_archive(path)
-    lines = [f"{Path(path).name} (v{archive.version}, {len(archive)} file{'s' if len(archive) != 1 else ''})"]
+    archive = archive or open_archive(path)
+    lines = [
+        f"{Path(path).name} ({archive.format_label}, {len(archive)} file{'s' if len(archive) != 1 else ''})"
+    ]
     for entry in archive.entries:
         lines.append(f"  {entry.name}  [{entry.size} bytes]")
     return "\n".join(lines)

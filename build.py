@@ -179,7 +179,7 @@ def build_exe() -> list[Path]:
     #   TZarchiverCli.exe --console : normal console stdout/stderr for CLI use
     _pyinstaller(APP_NAME, GUI_ENTRY,
                  ["--onefile", "--windowed", *hidden_imports(), *bundled_assets(),
-                  *version_file(APP_NAME, "TZarchiver - Trainz .tzarc archive extractor"),
+                  *version_file(APP_NAME, "TZarchiver - Trainz .tzarc/.ja archive extractor"),
                   *_excludes()])
     _pyinstaller(f"{APP_NAME}Cli", CLI_ENTRY,
                  ["--onefile", "--console",
@@ -291,7 +291,7 @@ def build_deb() -> Path:
     run(["fpm", "-s", "dir", "-t", "deb",
          "-n", "tzarchiver", "--version", VERSION,
          "--architecture", arch,
-         "--description", "Trainz .tzarc archive extractor/creator (GUI + CLI)",
+         "--description", "Trainz .tzarc/.ja archive extractor/creator (GUI + CLI)",
          "--depends", "python3",
          # the no-arg GUI mode needs the Qt binding; unlike PySide6, PyQt6
          # is packaged by every current distro, so the deb can depend on it
@@ -334,7 +334,7 @@ def build_zst() -> Path:
     run(["fpm", "-s", "dir", "-t", "pacman",
          "-n", "tzarchiver", "--version", VERSION,
          "--architecture", arch,
-         "--description", "Trainz .tzarc archive extractor/creator (GUI + CLI)",
+         "--description", "Trainz .tzarc/.ja archive extractor/creator (GUI + CLI)",
          "--depends", "python3",  # Arch's 'python' package Provides: python3
          "--depends", "python-pyqt6",  # Arch [extra] package for the binding
          "--maintainer", "SilverGreen93 <noreply@github.com>",
@@ -393,7 +393,7 @@ def _stage_unix_root(pkg_dir: Path) -> None:
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=TZarchiver\n"
-        "Comment=Trainz .tzarc archive extractor/creator\n"
+        "Comment=Trainz .tzarc/.ja archive extractor/creator\n"
         "Exec=tzarchiver\n"
         "Icon=tzarchiver\n"
         "Categories=Utility;\n",

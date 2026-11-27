@@ -1,7 +1,8 @@
 """Reading and writing of Trainz archive files (``*.tzarc``).
 
 This module is pure logic: it never imports Qt and never shows UI.  See
-``tzarc-format.md`` in the project root for the format description.
+``tzarc-format.md`` in the project root for the format description; the pieces
+both archive formats share live in ``archive.py``.
 
 Version 1 is uncompressed and stores every field big endian.  Version 2 keeps
 the ``TZac`` + version header uncompressed and wraps the whole version 1 body
@@ -11,12 +12,12 @@ independently zlib-compressed 65000 byte blocks.
 
 from __future__ import annotations
 
-import re
 import struct
 import zlib
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import BinaryIO, Iterable, Iterator, Sequence
+
+from .archive import ArchiveBase, ArchiveError, Entry, default_extract_dir
 
 __all__ = [
     "MAGIC",
@@ -48,28 +49,15 @@ CHUNK_SIZE = 65000
 #: Name length is stored in a single byte.
 MAX_NAME_LENGTH = 255
 
-#: Entry names are relative; this matches the rooted forms that must never be
-#: written to disk below the extraction folder.
-_ABSOLUTE_NAME = re.compile(r"^(?:[A-Za-z]:[/\\]|[/\\])")
 
-
-class TzarcError(Exception):
+class TzarcError(ArchiveError):
     """Raised for anything that is not a readable/writable tzarc archive."""
 
 
-@dataclass(frozen=True)
-class Entry:
-    """One file inside an archive.
-
-    ``name`` uses forward slashes for subfolders, as stored in the archive.
-    """
-
-    name: str
-    size: int
-
-
-class Archive:
+class Archive(ArchiveBase):
     """An archive plus the contents of every file it holds."""
+
+    error = TzarcError
 
     def __init__(self, version: int = V1, entries: Iterable[Entry] = (), contents: Iterable[bytes] = ()):
         if version not in (V1, V2):
@@ -82,12 +70,6 @@ class Archive:
         self._data: dict[str, bytes] = {e.name: d for e, d in zip(self.entries, data)}
 
     # -- access -----------------------------------------------------------
-    def names(self) -> list[str]:
-        return [e.name for e in self.entries]
-
-    def __len__(self) -> int:
-        return len(self.entries)
-
     def __contains__(self, name: str) -> bool:
         return name in self._data
 
@@ -97,6 +79,11 @@ class Archive:
             return self._data[name]
         except KeyError:
             raise TzarcError(f"{name} is not in this archive") from None
+
+    @property
+    def format_label(self) -> str:
+        """How the archive is named in listings: "v1" or "v2"."""
+        return f"v{self.version}"
 
     # -- output -----------------------------------------------------------
     def write(self, path: str | Path, version: int | None = None) -> Path:
@@ -113,63 +100,10 @@ class Archive:
         path.write_bytes(MAGIC + version.to_bytes(4, "big") + payload)
         return path
 
-    def extract(self, dest_dir: str | Path | None = None) -> Path:
-        """Write every file below ``dest_dir``, creating subfolders as needed.
-
-        Forward slashes in entry names become real directories.  When
-        ``dest_dir`` is omitted, :func:`default_extract_dir`-style naming is up
-        to the caller; here it is required.
-        """
-        if dest_dir is None:
-            raise TzarcError("extract() needs a destination directory")
-        dest = Path(dest_dir)
-        dest.mkdir(parents=True, exist_ok=True)
-        for entry in self.entries:
-            target = _safe_join(dest, entry.name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(self.read(entry.name))
-        return dest
-
-    def extract_entry(self, name: str, dest_dir: str | Path) -> Path:
-        """Write the single file ``name`` into ``dest_dir``, by its own name.
-
-        The folders the entry sits in inside the archive are not recreated:
-        the chosen destination becomes the file's folder.
-        """
-        dest = Path(dest_dir)
-        dest.mkdir(parents=True, exist_ok=True)
-        base = name.replace("\\", "/").split("/")[-1]
-        target = _safe_join(dest, base)
-        target.write_bytes(self.read(name))
-        return target
-
-    def extract_folder(self, prefix: str, dest_dir: str | Path) -> Path:
-        """Write every file below the folder ``prefix`` into ``dest_dir``.
-
-        The folder itself is recreated inside ``dest_dir`` under its own name
-        and keeps the structure of everything below it.
-        """
-        prefix = prefix.replace("\\", "/").strip("/")
-        start = prefix + "/"
-        dest = Path(dest_dir) / Path(prefix).name
-        dest.mkdir(parents=True, exist_ok=True)
-        written = 0
-        for entry in self.entries:
-            if not entry.name.replace("\\", "/").startswith(start):
-                continue
-            target = _safe_join(dest, entry.name[len(start) :])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(self.read(entry.name))
-            written += 1
-        if written == 0:
-            raise TzarcError(f"folder {prefix} is not in this archive")
-        return dest
-
-
-def default_extract_dir(archive_path: str | Path) -> Path:
-    """Folder the original app extracts to: ``<archive dir>\\<archive name>``."""
-    path = Path(archive_path)
-    return path.parent / path.stem
+    # -- extracting (the how of it; archive.py drives the where) ----------
+    def write_contents(self, name: str, target: BinaryIO) -> None:
+        """Hand the stored bytes of ``name`` to the open file ``target``."""
+        target.write(self.read(name))
 
 
 def read_archive(path: str | Path) -> Archive:
@@ -302,21 +236,6 @@ def _make_v2_payload(body: bytes) -> bytes:
         out += struct.pack("<H", len(chunk) - 1)
     out += b"".join(compressed)
     return bytes(out)
-
-
-def _safe_join(dest: Path, name: str) -> Path:
-    """Join an entry name onto ``dest`` while rejecting path escapes.
-
-    Entry names are always relative with forward slashes, so anything rooted
-    (``/x``, ``C:\\x``, ``\\\\server\\x``) or climbing out with ``..`` is refused
-    instead of being quietly rewritten.
-    """
-    if _ABSOLUTE_NAME.match(name):
-        raise TzarcError(f"unsafe file name in archive: {name}")
-    parts = [p for p in name.replace("\\", "/").split("/") if p not in ("", ".")]
-    if not parts or ".." in parts:
-        raise TzarcError(f"unsafe file name in archive: {name}")
-    return dest.joinpath(*parts)
 
 
 def iter_entries(archive: Archive) -> Iterator[Entry]:

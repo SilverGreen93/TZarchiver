@@ -146,3 +146,46 @@ def test_creating_several_folders_is_allowed(tmp_path):
 
 def test_run_cli_reports_failure_when_any_path_fails(tmp_path):
     assert not run_cli([str(tmp_path / "nope")])
+
+
+# ---------------------------------------------------------------------------
+# Jet Archive (.ja) files: listed and extracted, never created
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def ja_archive(tmp_path):
+    from ja_builder import build_ja, sample_members
+
+    path = tmp_path / "Data.ja"
+    path.write_bytes(build_ja(sample_members()))
+    return path
+
+
+def test_lists_a_jet_archive(capsys, ja_archive):
+    assert main([str(ja_archive)]) == 0
+    out = capsys.readouterr().out
+    assert "Data.ja (ja 1.2, 4 files)" in out
+    assert "config.chump  [81 bytes]" in out
+    assert "sounds/loop/beep2.wav  [23040 bytes]" in out
+
+
+def test_extracts_a_jet_archive_into_a_folder_named_after_it(capsys, ja_archive, tmp_path):
+    from ja_builder import BIG
+
+    assert main(["--extract", str(ja_archive)]) == 0
+    made = tmp_path / "Data"
+    assert (made / "sounds" / "beep.wav").read_bytes() == BIG
+    assert (made / "license.txt").read_bytes() == b"read me\n"
+    assert "extracted to" in capsys.readouterr().out
+
+
+def test_extracts_a_jet_archive_to_the_out_folder(capsys, ja_archive, tmp_path):
+    from ja_builder import BIG
+
+    out = tmp_path / "out"
+    assert main(["-x", "-o", str(out), str(ja_archive)]) == 0
+    assert (out / "sounds" / "loop" / "beep2.wav").read_bytes() == BIG
+
+
+def test_describe_shows_a_jet_archive_version(ja_archive):
+    assert describe(ja_archive).splitlines()[0] == "Data.ja (ja 1.2, 4 files)"
