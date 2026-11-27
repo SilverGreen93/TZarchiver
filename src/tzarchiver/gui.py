@@ -9,7 +9,9 @@ entry in the Extract tree offers "Extract to...",
 which unpacks that one file, folder or whole archive into a chosen destination;
 right-clicking a queued folder in the Create tree offers "Create in...", which
 writes its archive into a chosen destination.  Both menus can also "Remove" a
-queued tzarc or folder from its list.
+queued tzarc or folder from its list.  A Filter box under the tabs hides,
+letter by letter, every list row whose name misses the typed text, keeping
+matching entries and their parents.
 The compressed v2 checkbox belongs to the Create tab only and keeps
 its state from one run to the next.
 """
@@ -30,6 +32,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -192,6 +195,16 @@ class TzarcWindow(QWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.tabs, 1)
 
+        # one filter box serves both trees and applies on every keystroke
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Filter:"))
+        self.edit_filter = QLineEdit()
+        self.edit_filter.setClearButtonEnabled(True)
+        self.edit_filter.setPlaceholderText("filter by partial name")
+        self.edit_filter.textChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.edit_filter, 1)
+        outer.addLayout(filter_row)
+
         # action row below the tabs; only the current tab's buttons are shown
         actions = QHBoxLayout()
         actions.setSpacing(4)
@@ -255,6 +268,47 @@ class TzarcWindow(QWidget):
         if tree.topLevelItemCount() == 1 and tree.topLevelItem(0).isDisabled():
             tree.takeTopLevelItem(0)
 
+    # -- filter -----------------------------------------------------------------
+    def _apply_filter(self, text: str = "") -> None:
+        """Hide list rows whose name misses ``text``, letter-per-keystroke.
+
+        A row stays when its own name contains the text (whole subtree kept)
+        or when any descendant does; parents kept only for their matching
+        children expand so those stay reachable.  An empty filter shows all;
+        the drag hint is never filtered.
+        """
+        needle = text.casefold()
+        for tree in (self.tv_extract, self.tv_create):
+            for i in range(tree.topLevelItemCount()):
+                item = tree.topLevelItem(i)
+                if item.isDisabled():
+                    item.setHidden(False)  # the hint is not part of the list
+                elif not needle:
+                    self._set_visible(item, True)
+                else:
+                    self._filter_node(item, needle)
+
+    def _filter_node(self, node: QTreeWidgetItem, needle: str) -> bool:
+        """Show ``node`` if it or any descendant matches ``needle``; report it."""
+        if needle in node.text(0).casefold():
+            if node.childCount():
+                node.setExpanded(True)
+            self._set_visible(node, True)
+            return True
+        # every child is filtered first: any() must not short-circuit the rest
+        child_visible = [self._filter_node(node.child(i), needle) for i in range(node.childCount())]
+        visible = any(child_visible)
+        node.setHidden(not visible)
+        if visible and node.childCount():
+            node.setExpanded(True)  # keep the path to the match open
+        return visible
+
+    def _set_visible(self, node: QTreeWidgetItem, visible: bool) -> None:
+        """Set ``visible`` on ``node`` and everything below it."""
+        node.setHidden(not visible)
+        for i in range(node.childCount()):
+            self._set_visible(node.child(i), visible)
+
     def _on_tab_changed(self, index: int) -> None:
         self.btn_extract.setVisible(index == EXTRACT_TAB)
         self.btn_extract_to.setVisible(index == EXTRACT_TAB)
@@ -301,6 +355,7 @@ class TzarcWindow(QWidget):
             root.setText(0, f"{Path(path).name} (v{archive.version})")  # show the tzarc version
             self._add_entry_nodes(root, archive)
         root.setExpanded(True)
+        self._apply_filter(self.edit_filter.text())  # a running filter covers it too
 
     @staticmethod
     def _add_entry_nodes(root: QTreeWidgetItem, archive) -> None:
@@ -343,6 +398,7 @@ class TzarcWindow(QWidget):
             if child.is_file():
                 root.addChild(QTreeWidgetItem([child.relative_to(base).as_posix()]))
         root.setExpanded(True)
+        self._apply_filter(self.edit_filter.text())  # a running filter covers it too
 
     # -- actions --------------------------------------------------------------
     def on_extract(self) -> None:

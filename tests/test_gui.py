@@ -892,6 +892,102 @@ def test_remove_menu_never_opens_over_the_drag_hints(window, monkeypatch):
     assert _right_click(window, window.tv_create, window.tv_create.topLevelItem(0), monkeypatch) == []
 
 
+# ---------------------------------------------------------------------------
+# filter box under the tabs
+# ---------------------------------------------------------------------------
+
+def _visible_rows(tree):
+    """Shown top-level rows mapped to their shown descendant names."""
+    rows = {}
+    for i in range(tree.topLevelItemCount()):
+        top = tree.topLevelItem(i)
+        if top.isHidden():
+            continue
+        shown = []
+
+        def walk(node):
+            for j in range(node.childCount()):
+                child = node.child(j)
+                if not child.isHidden():
+                    shown.append(child.text(0))
+                    walk(child)
+
+        walk(top)
+        rows[top.text(0)] = shown
+    return rows
+
+
+def test_filter_field_sits_between_the_tabs_and_the_buttons(window, qapp):
+    window.show()
+    qapp.processEvents()
+    assert window.tabs.geometry().bottom() <= window.edit_filter.geometry().top()
+    assert window.edit_filter.geometry().bottom() <= window.btn_extract.geometry().top()
+
+
+def test_filter_keeps_matching_files_with_only_their_parents(window, tmp_path):
+    one = tmp_path / "kuid123"
+    two = tmp_path / "kuid345"
+    one.mkdir()
+    two.mkdir()
+    for name in ("abcd", "mnop"):
+        (one / name).write_text("x", encoding="utf-8")
+    (two / "qwerty").write_text("x", encoding="utf-8")
+    window.load_paths([str(one), str(two)])
+    window.edit_filter.setText("m")  # applies letter by letter as the user types
+    assert _visible_rows(window.tv_create) == {"kuid123": ["mnop"]}
+    window.edit_filter.setText("bc")
+    assert _visible_rows(window.tv_create) == {"kuid123": ["abcd"]}
+    window.edit_filter.setText("")
+    assert _visible_rows(window.tv_create) == {
+        "kuid123": ["abcd", "mnop"],
+        "kuid345": ["qwerty"],
+    }
+
+
+def test_filter_reveals_matches_inside_collapsed_archive_folders(window, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    root = window.tv_extract.topLevelItem(0)
+    folder = root.child(1)
+    assert not folder.isExpanded()
+    window.edit_filter.setText("fisier")
+    assert not folder.isHidden() and folder.isExpanded()  # opened so the match is reachable
+    assert root.child(0).isHidden()  # config.chump misses the filter
+    assert not folder.child(0).isHidden()
+
+
+def test_filter_ignores_case(window, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    window.edit_filter.setText("CHUMP")
+    assert _visible_rows(window.tv_extract) == {f"{archive.name} (v1)": ["config.chump"]}
+
+
+def test_filter_matching_the_archive_row_keeps_its_whole_listing(window, tmp_path):
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    window.edit_filter.setText(archive.name)  # only the top row's name matches
+    assert _visible_rows(window.tv_extract) == {
+        f"{archive.name} (v1)": ["config.chump", "folder", "fisier.txt"],
+    }
+
+
+def test_the_drag_hint_is_never_filtered(window):
+    window.edit_filter.setText("xyz")
+    hint = window.tv_extract.topLevelItem(0)
+    assert hint.text(0) == PLACEHOLDER_EXTRACT and not hint.isHidden()
+
+
+def test_drops_while_a_filter_is_active_are_filtered_too(window, tmp_path):
+    window.edit_filter.setText("zzz")
+    archive = _copy_archive(tmp_path)
+    window.load_paths([str(archive)])
+    assert window.tv_extract.topLevelItem(0).isHidden()
+    assert window.extract_files == [str(archive)]  # only the view is filtered, not the queue
+    window.edit_filter.setText("")
+    assert not window.tv_extract.topLevelItem(0).isHidden()
+
+
 def test_the_right_click_menu_offers_extract_to_and_runs_it(window, dialogs, monkeypatch, tmp_path):
     archive = _copy_archive(tmp_path)
     window.load_paths([str(archive)])
